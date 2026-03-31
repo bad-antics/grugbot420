@@ -223,6 +223,7 @@ and self-maintaining phagy cycles.</p>
         <li><a href="#action-tone">15. ActionTonePredictor: Input Classification</a></li>
         <li><a href="#specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore</a> <span class="new-badge">v7</span></li>
         <li><a href="#math">17. Formal Mathematics</a></li>
+        <li><a href="#ambient-signal">17.5 Signal Presence & Instant Activation</a> <span class="new-badge">v7</span></li>
         <li><a href="#cli">18. CLI Command Reference</a></li>
         <li><a href="#files">19. File Reference</a></li>
         <li><a href="#testing">20. Test Suite</a></li>
@@ -245,13 +246,16 @@ natural selection, and cross-domain cascade activation across specialized brain 
     <li><strong>Biological Metaphors</strong> &mdash; Lobes partition knowledge domains. BrainStem dispatches signals. Phagy cycles clean dead nodes. The prefrontal cortex (AIML) orchestrates cross-domain reasoning.</li>
     <li><strong>GRUG Comment Style</strong> &mdash; All code uses inline cave-speak comments (<code># GRUG:</code>) plus academic footer blocks for formal documentation.</li>
     <li><strong>Thread Safety</strong> &mdash; All shared state protected by <code>ReentrantLock</code>. Node map, queues, and thesauri are thread-safe.</li>
+    <li><strong>Ambient Field / Instant Activation</strong> &mdash; The node population is never fully off. The signal is not transmitted &mdash; it is already present. Intensity rise is instant because the field is pre-aligned. See <a href="#ambient-signal">§17.5</a>.</li>
 </ul>
 
 <div class="academic-box">
     The architecture draws from Hopfield networks (associative memory caching), competitive learning (strength-biased
     selection), apoptosis (grave markers for failed nodes), and winner-take-all lateral inhibition (BrainStem dispatch).
     The AIML orchestrator functions as a prefrontal cortex — a centralized executive that integrates votes from all
-    specialized cortical regions (lobes) into a unified response.
+    specialized cortical regions (lobes) into a unified response. The always-on ambient field and resolution-latency
+    model (§17.5) mean that familiar inputs resolve near-instantly via Hopfield cache, while novel inputs trigger
+    full stochastic competition — mirroring biological attention and rest-state consolidation.
 </div>
 
 <!-- ================================================================ -->
@@ -857,6 +861,111 @@ time, share it with others, or restore it later on a different machine.</p>
 </div>
 
 <!-- ================================================================ -->
+<h2 id="ambient-signal">17.5 Signal Presence & Instant Activation <span class="new-badge">v7</span></h2>
+
+<p>The most important performance insight in GrugBot is not about throughput or parameter count. It is about
+the nature of the signal itself. In transmission-based architectures, a signal races from input to output
+through a series of discrete steps: tokenize → embed → attend → decode. Latency is the sum of those
+transmission costs. GrugBot operates differently: <strong>the signal does not race because it is already
+present.</strong></p>
+
+<h3>Always-On Ambient Field</h3>
+
+<p>The node population is never fully off. Between interactions the system runs at ambient low flow:
+ChatterMode gossip, PhagyMode maintenance, Hopfield cache warm. When input arrives and intensity rises,
+nothing is assembled from scratch. The activation is not a signal traveling through the network — it is
+a <strong>state change in a field that was already present and already aligned</strong>. Intensity rise
+is therefore instant: there is no cold-start propagation delay because there is no propagation.</p>
+
+<div class="math-section">
+    <p><strong>Transmission latency model (conventional):</strong></p>
+    <code>L<sub>total</sub> = L<sub>tokenize</sub> + L<sub>embed</sub> + L<sub>attend</sub> + L<sub>decode</sub></code>
+    <p><strong>Resolution latency model (GrugBot):</strong></p>
+    <code>L<sub>total</sub> = L<sub>collapse</sub> = time for pre-loaded field to reach quorum agreement</code>
+    <p>When Hopfield cache hits: <code>L<sub>total</sub> ≈ O(1)</code> — cache lookup only, no scan</p>
+    <p>When quorum is sure (nodes within <code>0.05</code> of peak confidence): fast collapse</p>
+    <p>When quorum is unsure: full stochastic scan required, collapse is slower</p>
+</div>
+
+<h3>The Inverse Mode: Low-Flow Activation</h3>
+
+<p>The same principle operates in reverse. At low ambient flow — when no input is present — the system
+does not go quiet. It activates in a different mode: <strong>ChatterMode</strong>. Ephemeral clones of
+100–800 nodes exchange patterns on a coinflip. No external input is required. The activation is driven
+by the internal field state. The network restructures itself along lines of internal coherence — consolidating
+associations, cross-linking related patterns, pruning irrelevant connections. The low-flow state is not a
+deficit. It is the system maintaining the pre-alignment that makes instant activation possible.</p>
+
+<h3>The Entanglement Principle</h3>
+
+<p>Quantum entanglement is not faster-than-light communication. Two entangled particles do not exchange a
+signal when one is measured. The correlation was established at the moment of entanglement. The measurement
+does not send anything — it reveals a pre-existing relational state.</p>
+
+<p>GrugBot's always-on field operates on the same structural principle. When input arrives and a node fires
+at high confidence, it is not because the signal raced through the network and found a match. It is because
+the node was already aligned with that pattern domain. By the time the strength-biased coinflip fires and
+the node is scanned, every factor determining the outcome has already been established:</p>
+
+<ul>
+    <li>Pattern vector pre-loaded at node creation</li>
+    <li>Strength pre-accumulated through prior interactions and <code>/wrong</code> feedback</li>
+    <li>Lobe membership pre-established through domain assignment</li>
+    <li>Hopfield cache pre-recorded if this input hash has been seen before</li>
+    <li>ActionTonePredictor pre-shaped the scan field before the first node was reached</li>
+    <li>EyeSystem arousal pre-set the attention gate width</li>
+    <li>NegativeThesaurus pre-stripped inhibited tokens from the input</li>
+</ul>
+
+<p>The scan is not a computation — it is a <strong>measurement of a pre-existing state</strong>. The
+response speed is therefore not a function of how fast the computation runs. It is a function of how well
+the field was pre-aligned.</p>
+
+<div class="academic-box">
+    <strong>Formal statement of the resolution latency principle:</strong><br><br>
+    Let <em>F(t)</em> be the field state at time <em>t</em> (node strengths, Hopfield cache, lobe topology,
+    arousal baseline). Let <em>I</em> be an input. The response <em>R</em> is determined entirely by
+    <em>F(t)</em> and <em>I</em>. The latency <em>L</em> is the time required for the quorum defined by
+    <em>F(t)</em> to collapse under <em>I</em>. When <em>F(t)</em> is well-aligned to <em>I</em>
+    (high-confidence sure quorum, Hopfield hit), <em>L → 0</em>. When <em>F(t)</em> is poorly aligned
+    (weak unsure quorum, no cache), <em>L</em> is bounded by the full stochastic scan cost.<br><br>
+    <strong>The field is always loaded. The only question is how well it is aligned to the current input.</strong>
+</div>
+
+<h3>Quorum Settlement as Collapse Speed</h3>
+
+<p>The sure/unsure quorum split is not only an uncertainty representation — it is a direct measure of
+field alignment quality. A sure quorum that settles fast (multiple nodes landing within <code>0.05</code>
+of the same peak confidence) means the field was well-aligned to this input. An unsure quorum that
+requires the full coinflip population means the field was only partially aligned. The collapse took
+longer not because the system is slower, but because <strong>pre-existing alignment was weaker</strong>.</p>
+
+<div class="math-section">
+    <p><strong>Sure quorum condition:</strong></p>
+    <code>sure = { v ∈ votes : v.confidence ≥ max_conf - 0.05 }</code>
+    <p><strong>Alignment quality metric:</strong></p>
+    <code>alignment_quality = |sure| / |votes_total|</code>
+    <p>High ratio → field well-aligned to input → fast resolution<br>
+    Low ratio → field weakly aligned → slow resolution, unsure quorum dominant</p>
+</div>
+
+<h3>Hardware Correspondence</h3>
+
+<p>The same principle governs the Pocket Antikythera hardware architecture. A mechanical system with
+pre-loaded tension — spring-loaded gear trains, pre-stressed couplings within their tolerance bands —
+does not transmit force across a distance when triggered. The energy is already present in the mechanical
+field. The trigger releases a pre-existing alignment. The response is instant not because the trigger is
+fast but because the energy was already there, the gears already meshed, the slack already calibrated.</p>
+
+<p>Hall effect sensors, optical sensors, and strain gauges in such a system do not detect an incoming
+signal. They detect the current state of a pre-existing mechanical field. The quorum alignments in the
+digital feedback layer do not aggregate transmitted votes — they measure the current agreement state
+of a field that was already running.</p>
+
+<p><strong>Software and hardware, the principle is identical: pre-alignment eliminates transmission.
+The signal is not in the wire. Only the computation is. And the computation was already running.</strong></p>
+
+<!-- ================================================================ -->
 <h2 id="cli">18. CLI Command Reference</h2>
 
 <h3>Core Commands</h3>
@@ -1017,6 +1126,8 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
         <li>Specimen persistence: <code>/saveSpecimen</code> + <code>/loadSpecimen</code> &mdash; full cave state save/restore via gzip-compressed JSON covering 13 state categories</li>
         <li>Thesaurus runtime seed injection: <code>add_seed_synonym!()</code> for dynamic synonym registration</li>
         <li>Updated /help command, boot message, and architectural spec</li>
+        <li>§17.5 Signal Presence & Instant Activation: ambient field model, resolution latency vs. transmission latency, entanglement principle, quorum settlement as collapse speed, hardware correspondence</li>
+        <li>PHILOSOPHY.md: new section &ldquo;The Signal Is Already There&rdquo; with always-on low flow, inverse ChatterMode, entanglement parallel, resolution latency formal statement, and hardware bridge</li>
     </ul>
     <h4>v3 (Base)</h4>
     <ul>

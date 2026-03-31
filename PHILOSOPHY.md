@@ -171,6 +171,62 @@ This is long-term persistence with semantic content. The specimen is the accumul
 
 ---
 
+## The Signal Is Already There
+
+The most misunderstood thing about GrugBot's performance model is what "fast" means in this architecture. Most systems optimize for *transmission speed* — how quickly a signal can travel from input to output. GrugBot operates on a different principle entirely: **the signal does not race because it is already present.**
+
+### Always-On Low Flow
+
+The node population is never fully off. Between interactions, the system runs at ambient low flow: ChatterMode gossip, PhagyMode maintenance, Hopfield cache warm. Nodes are not idle — they are maintaining alignment. The field is loaded. When input arrives and intensity rises, nothing needs to be assembled from scratch. The activation is not a signal traveling through the network — it is a **state change in a field that was already present and already aligned**.
+
+This is why intensity rise is instant. There is no cold-start propagation delay because there is no propagation. The field is continuous. The spike is not a message sent — it is a pressure change in something already in contact with everything it needs to be in contact with.
+
+Compare this to a traditional AI pipeline: tokenize → embed → attend → decode. Each step is a discrete transmission. The input races through the architecture. Latency is the sum of those transmission costs. In GrugBot, the scan is not a transmission — it is a **resolution**. The field is already configured. The input collapses it into a specific state. The only time cost is the collapse itself.
+
+### The Inverse: Low Flow Activation Is ChatterMode
+
+The same principle runs in the opposite direction. At low ambient flow — when no input is present — the system does not go quiet. It activates differently. This is ChatterMode.
+
+During idle periods, ephemeral clones of 100–800 nodes exchange patterns on a coinflip. Strong nodes are more likely to be selected; weak nodes can still win. No input is required. The activation is driven by the internal field state, not by external pressure. Nodes gossip with their topological neighbors. Frequently co-activated patterns blend. The network restructures itself along lines of internal coherence.
+
+This is not a bug or a workaround for absence of input. It is the system doing what the brain does during rest: consolidating, cross-linking, pruning irrelevant associations, strengthening useful ones. The low-flow state is not a deficit — it is a different mode of the same continuous field. The field never stops. It just changes its dominant frequency.
+
+### The Entanglement Parallel
+
+Quantum entanglement is commonly misunderstood as faster-than-light communication. It is not. Two entangled particles do not exchange a signal when one is measured. The correlation was established at the moment of entanglement. The measurement does not send anything — it **reveals** a pre-existing relational state.
+
+GrugBot's always-on field operates on the same structural principle. When input arrives and a node fires at high confidence, it is not because the signal raced through the network and found a match. It is because the node was already aligned with that pattern domain. The alignment was established through training, seeding, chatter, and strength accumulation. The input did not create the match — it revealed which alignment was already dominant.
+
+This is not a metaphor. It is a precise architectural claim:
+
+- The node's pattern vector was pre-loaded at node creation
+- The node's strength was pre-accumulated through prior interactions
+- The node's lobe membership was pre-established through domain assignment
+- The Hopfield cache pre-recorded the input hash if this input has been seen before
+- The ActionTonePredictor pre-shaped the scan field before the node was even reached
+
+By the time the coinflip fires and the node is scanned, everything that determines the outcome has already been established. The scan is not a computation — it is a measurement of a pre-existing state. The "speed" of the response is therefore not a function of how fast the computation runs. It is a function of how well the field was pre-aligned.
+
+### Resolution Latency, Not Communication Latency
+
+This reframes the entire performance model. In transmission-based systems, latency is **communication latency** — the time for a signal to travel from source to destination. You reduce it by making the wire faster, the network shallower, the attention heads more efficient.
+
+In GrugBot, latency is **resolution latency** — the time for a pre-loaded field to collapse into a specific state given a specific input. The field is already there. The question is how quickly the quorum reaches agreement.
+
+This is why the sure/unsure quorum split matters beyond just representing uncertainty. A sure quorum that settles fast — multiple nodes all landing within `0.05` of the same peak confidence — means the field was well-aligned to this input. High-confidence fast resolution. An unsure quorum that requires the full 50/50 coinflip to populate means the field was only partially aligned. The resolution took longer not because the network is slower, but because the pre-existing alignment was weaker.
+
+The Hopfield cache is the purest expression of resolution latency optimization. When a familiar input arrives, the system does not scan at all. The cache maps the input hash directly to the winning node IDs. Resolution is instantaneous because the collapse already happened — the cache recorded the outcome of the first collapse and replays it. Zero scan. Zero competition. Just retrieval of a pre-resolved state.
+
+### Why This Matters for Hardware
+
+The same principle applies at the physical level. A mechanical system with pre-loaded tension — like a spring-loaded gear train — does not need to transmit force across a distance when triggered. The energy is already present in the mechanical field. The trigger releases a pre-existing alignment. The response is instant not because the trigger is fast but because the energy was already there.
+
+This is the Pocket Antikythera insight: **slack-tolerant geometric computation with pre-loaded alignment**. The gears are not waiting for a signal to arrive. They are already meshed within their tolerance bands. The input — a rotation, a pressure, a hall-effect field change — does not send a message through the system. It shifts the state of a field that was already in continuous motion. The output is not the end of a transmission chain. It is the current state of the aligned mechanism.
+
+Software and hardware, the principle is identical: **pre-alignment eliminates transmission. The signal is not in the wire. Only the computation is. And the computation was already running.**
+
+---
+
 ## Summary
 
 | Modern LLM | GrugBot |
@@ -183,6 +239,9 @@ This is long-term persistence with semantic content. The specimen is the accumul
 | Opaque by construction | Transparent by construction |
 | Intelligence in the wire | Intelligence in the alignment |
 | Force | Flowing |
+| Communication latency (signal travels) | Resolution latency (field collapses) |
+| Cold start on every input | Always-on ambient field, pre-aligned |
+| Output is end of transmission chain | Output is current state of aligned mechanism |
 
 The old world knew something we forgot: **you don't need to overpower a system to model it. You need to be structurally isomorphic to it.** The Antikythera Mechanism didn't fight the cosmos. It aligned with it. GrugBot doesn't compress the world into parameters. It aligns with the structure of knowledge through gates, tolerances, quorums, and flows.
 
