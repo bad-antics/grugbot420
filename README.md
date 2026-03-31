@@ -229,16 +229,17 @@ You don't need to trigger this manually. It runs between CLI prompts.
 Each test file is standalone:
 
 ```bash
-julia test_smoke.jl
-julia test_lobes.jl
-julia test_lobe_table.jl
-julia test_brainstem.jl
-julia test_thesaurus.jl
-julia test_chat_specimen.jl
-julia test_input_queue.jl
-julia test_action_packet.jl
-julia test_phagy.jl
-julia live_training_test.jl
+julia test_smoke.jl            # 16 integration groups
+julia test_lobes.jl            # 123 assertions
+julia test_lobe_table.jl       # 193 assertions
+julia test_brainstem.jl        # 39 assertions
+julia test_thesaurus.jl        # 151 assertions
+julia test_chat_specimen.jl    # 18 specimens
+julia test_input_queue.jl      # 20 groups, 1095 assertions
+julia test_action_packet.jl    # 18 groups, 111 assertions
+julia test_load_specimen.jl    # 14 groups, 102 assertions
+julia test_phagy.jl            # Phagy cycle (placeholder)
+julia live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
 ```
 
 ---
@@ -247,14 +248,14 @@ julia live_training_test.jl
 
 | File | Role |
 |---|---|
-| `Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager. |
+| `Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager, specimen persistence. |
 | `engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion. |
 | `stochastichelper.jl` | `@coinflip` macro and `bias()` helper for weighted probabilistic branching. |
 | `patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. |
 | `Lobe.jl` | Subject-specific node partitions with O(1) reverse index. |
 | `LobeTable.jl` | Per-lobe chunked hash table storage (nodes, json, drop, hopfield, meta chunks). |
 | `BrainStem.jl` | Winner-take-all dispatcher with cross-lobe signal propagation and fire-count decay. |
-| `Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary and gate filter. |
+| `Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary, gate filter, and runtime seed injection. |
 | `InputQueue.jl` | FIFO input queue and NegativeThesaurus inhibition filter. |
 | `ChatterMode.jl` | Idle gossip system: ephemeral node clones exchange patterns between prompts. |
 | `PhagyMode.jl` | Six idle-time maintenance automata for self-healing map management. |

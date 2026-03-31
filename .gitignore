@@ -1,0 +1,24 @@
+# Julia artifacts
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/build.log
+Manifest.toml
+
+# Specimen files (user-generated persistence snapshots)
+*.specimen.gz
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temp files
+/tmp/
+*.tmp

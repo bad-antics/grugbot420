@@ -185,7 +185,7 @@
             vertical-align: middle;
         }
     </style>
-<script src="https://sites.super.myninja.ai/_assets/ninja-daytona-script.js"></script>
+
 </head>
 <body>
 
@@ -209,19 +209,19 @@ and self-maintaining phagy cycles.</p>
         <li><a href="#overview">1. Overview & Philosophy</a></li>
         <li><a href="#architecture">2. System Architecture</a></li>
         <li><a href="#nodes">3. Nodes: The Atomic Unit</a></li>
-        <li><a href="#action-packets">4. Action Packets v2 (Pipe-Delimited)</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#action-packets">4. Action Packets v2 (Pipe-Delimited)</a> <span class="new-badge">v7</span></li>
         <li><a href="#lobes">5. Lobes: Subject-Specific Partitions</a></li>
         <li><a href="#lobe-tables">6. LobeTable: Per-Lobe Hash Storage</a></li>
         <li><a href="#brainstem">7. BrainStem: Winner-Take-All Dispatch</a></li>
-        <li><a href="#prefrontal">8. Prefrontal Cortex: AIML Orchestration</a> <span class="new-badge">NEW</span></li>
-        <li><a href="#input-queue">9. InputQueue & NegativeThesaurus</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#prefrontal">8. Prefrontal Cortex: AIML Orchestration</a> <span class="new-badge">v7</span></li>
+        <li><a href="#input-queue">9. InputQueue & NegativeThesaurus</a> <span class="new-badge">v7</span></li>
         <li><a href="#thesaurus">10. Thesaurus: Dimensional Similarity Engine</a></li>
         <li><a href="#phagy">11. Phagy Mode: Self-Maintenance</a></li>
         <li><a href="#eye-system">12. EyeSystem: Visual Processing</a></li>
         <li><a href="#chatter">13. ChatterMode: Gossip Sessions</a></li>
         <li><a href="#semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</a></li>
         <li><a href="#action-tone">15. ActionTonePredictor: Input Classification</a></li>
-        <li><a href="#specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore</a> <span class="new-badge">UPDATED</span></li>
+        <li><a href="#specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore</a> <span class="new-badge">v7</span></li>
         <li><a href="#math">17. Formal Mathematics</a></li>
         <li><a href="#cli">18. CLI Command Reference</a></li>
         <li><a href="#files">19. File Reference</a></li>
@@ -366,7 +366,7 @@ end</code></pre>
 </div>
 
 <!-- ================================================================ -->
-<h2 id="action-packets">4. Action Packets v2 (Pipe-Delimited) <span class="new-badge">v6</span></h2>
+<h2 id="action-packets">4. Action Packets v2 (Pipe-Delimited) <span class="new-badge">v7</span></h2>
 
 <p>Action packets define what a node <em>does</em> when it wins a vote. Version 2 uses <strong>pipe-delimited format</strong>
 with inline negatives per action, allowing action names to contain commas.</p>
@@ -495,7 +495,7 @@ the BrainStem selects a winner based on confidence and propagates inhibitory sig
 </div>
 
 <!-- ================================================================ -->
-<h2 id="prefrontal">8. Prefrontal Cortex: AIML Orchestration <span class="new-badge">v6</span></h2>
+<h2 id="prefrontal">8. Prefrontal Cortex: AIML Orchestration <span class="new-badge">v7</span></h2>
 
 <p>The AIML orchestrator is GrugBot's <strong>prefrontal cortex</strong> — a centralized executive that integrates
 votes from ALL lobes into a unified response. It is NOT per-lobe; it sees the entire cognitive state.</p>
@@ -521,7 +521,7 @@ votes from ALL lobes into a unified response. It is NOT per-lobe; it sees the en
     <tr><td><code>{CONFIDENCE}</code></td><td>Primary vote's confidence score</td></tr>
     <tr><td><code>{NODE_ID}</code></td><td>Primary vote's node ID</td></tr>
     <tr><td><code>{MEMORY}</code></td><td>Pinned + recent message history</td></tr>
-    <tr><td><code>{LOBE_CONTEXT}</code> <span class="new-badge">NEW</span></td><td>Active lobes with node counts and sample patterns</td></tr>
+    <tr><td><code>{LOBE_CONTEXT}</code> <span class="new-badge">v7</span></td><td>Active lobes with node counts and sample patterns</td></tr>
 </table>
 
 <h3>Lobe-Aware Context</h3>
@@ -547,7 +547,7 @@ Lobe Context: [philosophy (2/4 active: truth knowledge logic | ethical moral)]
 /addRule "Draw from {LOBE_CONTEXT} for cross-domain insight [prob=0.7]"</code></pre>
 
 <!-- ================================================================ -->
-<h2 id="input-queue">9. InputQueue & NegativeThesaurus <span class="new-badge">v6</span></h2>
+<h2 id="input-queue">9. InputQueue & NegativeThesaurus <span class="new-badge">v7</span></h2>
 
 <h3>InputQueue: FIFO Priority Buffer</h3>
 <p>The InputQueue buffers user input during chatter sessions or high-load periods. Items are
@@ -721,7 +721,7 @@ misaligned nodes get <1.0. This biases voting toward contextually appropriate re
 
 <!-- ================================================================ -->
 <!-- ================================================================ -->
-<h2 id="specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore <span class="new-badge">UPDATED</span></h2>
+<h2 id="specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore <span class="new-badge">v7</span></h2>
 
 <div class="grug-box">
     <p>Grug build cave for YEARS. Thousands of rocks. Hundreds of rules. Brain full of knowledge.
@@ -906,7 +906,7 @@ time, share it with others, or restore it later on a different machine.</p>
     <tr><td><code>/thesaurus <w1> | <w2> :: <ctx1> :: <ctx2></code></td><td>With context word lists</td></tr>
 </table>
 
-<h3>NegativeThesaurus Commands <span class="new-badge">v6</span></h3>
+<h3>NegativeThesaurus Commands <span class="new-badge">v7</span></h3>
 <table>
     <tr><th>Command</th><th>Description</th></tr>
     <tr><td><code>/negativeThesaurus add <word> [--reason <text>]</code></td><td>Register inhibition word</td></tr>
@@ -916,7 +916,7 @@ time, share it with others, or restore it later on a different machine.</p>
     <tr><td><code>/negativeThesaurus flush</code></td><td>Clear all inhibitions</td></tr>
 </table>
 
-<h3>Specimen Persistence <span class="new-badge">UPDATED</span></h3>
+<h3>Specimen Persistence <span class="new-badge">v7</span></h3>
 <table>
     <tr><th>Command</th><th>Description</th></tr>
     <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 13 state categories.</td></tr>
@@ -926,7 +926,7 @@ time, share it with others, or restore it later on a different machine.</p>
 <!-- ================================================================ -->
 <h2 id="files">19. File Reference</h2>
 
-<h3>Core Modules (15 files, ~8,789 lines)</h3>
+<h3>Core Modules (15 files, ~9,631 lines)</h3>
 <table>
     <tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
     <tr><td><code>stochastichelper.jl</code></td><td>168</td><td>@coinflip macro, Categorical distribution DSL</td></tr>
@@ -936,17 +936,17 @@ time, share it with others, or restore it later on a different machine.</p>
     <tr><td><code>ChatterMode.jl</code></td><td>575</td><td>Gossip sessions, pattern blending, input queue</td></tr>
     <tr><td><code>SemanticVerbs.jl</code></td><td>391</td><td>Runtime verb registry, synonym normalization, triple extraction</td></tr>
     <tr><td><code>ActionTonePredictor.jl</code></td><td>562</td><td>Input classification, arousal nudge, weight multiplier</td></tr>
-    <tr><td><code>engine.jl</code></td><td>1486</td><td>Core engine: nodes, scanning, voting, Hopfield cache, action packets</td></tr>
+    <tr><td><code>engine.jl</code></td><td>1,487</td><td>Core engine: nodes, scanning, voting, Hopfield cache, action packets</td></tr>
     <tr><td><code>Lobe.jl</code></td><td>381</td><td>Lobe registry, connections, node assignment</td></tr>
     <tr><td><code>LobeTable.jl</code></td><td>627</td><td>Per-lobe chunked hash storage</td></tr>
     <tr><td><code>BrainStem.jl</code></td><td>333</td><td>Winner-take-all dispatch, lateral inhibition</td></tr>
     <tr><td><code>InputQueue.jl</code></td><td>256</td><td>FIFO priority queue + NegativeThesaurus inhibition filter</td></tr>
-    <tr><td><code>Thesaurus.jl</code></td><td>630</td><td>Dimensional similarity, synonym bridging, gate filter</td></tr>
+    <tr><td><code>Thesaurus.jl</code></td><td>698</td><td>Dimensional similarity, synonym bridging, gate filter, runtime seed injection</td></tr>
     <tr><td><code>PhagyMode.jl</code></td><td>611</td><td>6 maintenance automata, self-pruning cycles</td></tr>
-    <tr><td><code>Main.jl</code></td><td>1485</td><td>CLI loop, command routing, AIML orchestrator, prefrontal cortex</td></tr>
+    <tr><td><code>Main.jl</code></td><td>2,390</td><td>CLI loop, command routing, AIML orchestrator, prefrontal cortex, specimen persistence</td></tr>
 </table>
 
-<h3>Test Files (10 files)</h3>
+<h3>Test Files (11 files)</h3>
 <table>
     <tr><th>File</th><th>Groups</th><th>Assertions</th><th>Coverage</th></tr>
     <tr><td><code>test_smoke.jl</code></td><td>16</td><td>~80</td><td>All modules integration: ImageSDF, EyeSystem, Engine, ChatterMode, SemanticVerbs, ActionTone</td></tr>
@@ -957,7 +957,8 @@ time, share it with others, or restore it later on a different machine.</p>
     <tr><td><code>test_chat_specimen.jl</code></td><td>18</td><td>—</td><td>Chat specimen format, command registration, pipe-delimited packets</td></tr>
     <tr><td><code>test_input_queue.jl</code></td><td>20</td><td>1095</td><td>InputQueue FIFO/priority/overflow + NegativeThesaurus CRUD/filter/stress</td></tr>
     <tr><td><code>test_action_packet.jl</code></td><td>18</td><td>111</td><td>Parser v2: pipe format, negatives, commas, weights, dedup, integration</td></tr>
-    <tr><td><code>test_phagy.jl</code></td><td>—</td><td>—</td><td>Phagy automaton cycle</td></tr>
+    <tr><td><code>test_load_specimen.jl</code></td><td>14</td><td>102</td><td>Specimen persistence: gzip round-trip, node/lobe/verb/hopfield/brainstem serialization, full save+load cycle</td></tr>
+    <tr><td><code>test_phagy.jl</code></td><td>—</td><td>—</td><td>Phagy automaton cycle (placeholder)</td></tr>
     <tr><td><code>live_training_test.jl</code></td><td>22</td><td>—</td><td>Multi-lobe training: 7 lobes, 21 nodes, cascade, cross-domain</td></tr>
 </table>
 
@@ -974,6 +975,7 @@ julia test_thesaurus.jl      # 151 assertions
 julia test_chat_specimen.jl  # 18 specimens
 julia test_input_queue.jl    # 20 groups, 1095 assertions
 julia test_action_packet.jl  # 18 groups, 111 assertions
+julia test_load_specimen.jl  # 14 groups, 102 assertions
 julia test_phagy.jl          # Phagy cycle
 julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code></pre>
 
@@ -988,6 +990,7 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
     <tr><td>test_chat_specimen.jl</td><td style="color:#00ff88;">✅ 0 errors</td><td>18 specimens validated</td></tr>
     <tr><td>test_input_queue.jl</td><td style="color:#00ff88;">✅ 1095</td><td>20 groups including stress test</td></tr>
     <tr><td>test_action_packet.jl</td><td style="color:#00ff88;">✅ 111</td><td>18 groups, pipe format validated</td></tr>
+    <tr><td>test_load_specimen.jl</td><td style="color:#00ff88;">✅ 102/102</td><td>14 groups, full specimen persistence coverage</td></tr>
     <tr><td>test_phagy.jl</td><td style="color:#00ff88;">✅ OK</td><td>Phagy cycle clean</td></tr>
     <tr><td>live_training_test.jl</td><td style="color:#00ff88;">✅ 0 hard fail</td><td>12+ pass, soft misses expected</td></tr>
 </table>
@@ -1010,7 +1013,9 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
         <li>3 new command families: explain(5), empathy(5), warning(5) = 15 new commands</li>
         <li>20 new science/philosophy synonym groups in Thesaurus</li>
         <li>Eliminated all silent catch blocks (replaced with @warn logging)</li>
-        <li>New test suites: test_input_queue.jl (1095 assertions), test_action_packet.jl (111 assertions)</li>
+        <li>New test suites: test_input_queue.jl (1,095 assertions), test_action_packet.jl (111 assertions), test_load_specimen.jl (102 assertions)</li>
+        <li>Specimen persistence: <code>/saveSpecimen</code> + <code>/loadSpecimen</code> &mdash; full cave state save/restore via gzip-compressed JSON covering 13 state categories</li>
+        <li>Thesaurus runtime seed injection: <code>add_seed_synonym!()</code> for dynamic synonym registration</li>
         <li>Updated /help command, boot message, and architectural spec</li>
     </ul>
     <h4>v3 (Base)</h4>
