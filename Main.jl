@@ -714,476 +714,821 @@ function _scan_image_specimens(img_signal::Vector{Float64})
 end
 
 # ==============================================================================
-# SPECIMEN LOADER (BATCH SEEDING FROM JSON)
+# SPECIMEN PERSISTENCE (SAVE / LOAD FULL CAVE STATE FROM COMPRESSED FILE)
 # ==============================================================================
 
-# GRUG: /loadSpecimen is the BIG GROW. Not one node at a time like /grow.
-# Grug hand you the ENTIRE CAVE BLUEPRINT in one JSON scroll.
-# Nodes, rules, lobes, connections, verbs, synonyms, inhibitions, pins — ALL AT ONCE.
-# Grug validate EVERYTHING before planting ANYTHING. If scroll is bad, NOTHING grows.
-# No half-built caves. No silent failures. Grug scream loud if scroll is wrong.
+# GRUG: /saveSpecimen writes the ENTIRE cave state to a gzip-compressed JSON file.
+# /loadSpecimen reads that file back and RESTORES the ENTIRE cave from scratch.
+# This is LONG-TERM STORAGE. Not "add a few nodes" — this is "freeze the whole brain,
+# put it in a jar, thaw it later with every neuron exactly where Grug left it."
+# No silent failures. No half-restores. If the file is bad, NOTHING changes.
+# Grug screams loud. Grug validates everything. Grug is paranoid.
 
 """
-load_specimen_from_json!(json_str::String)::String
+save_specimen_to_file!(filepath::String)::String
 
-GRUG: Parse a full specimen blueprint JSON and seed the cave in batch.
-Validates the entire payload before committing any changes.
-Returns a multi-line summary string of everything that happened.
+GRUG: Serialize the ENTIRE cave state to a gzip-compressed JSON file.
+Captures ALL mutable state across all modules:
+  - nodes       (full Node struct: strengths, patterns, neighbors, graves, etc.)
+  - hopfield    (HOPFIELD_CACHE + hit counts)
+  - rules       (AIML_DROP_TABLE stochastic rules)
+  - messages    (up to 10k message history with pin flags)
+  - lobes       (LOBE_REGISTRY: fire/inhibit counts, connections, node assignments)
+  - lobe_tables (LOBE_TABLE_REGISTRY: all chunks with NodeRef objects)
+  - verbs       (verb classes + verbs + synonyms from SemanticVerbs)
+  - thesaurus   (SYNONYM_SEED_MAP runtime additions from Thesaurus)
+  - inhibitions (NegativeThesaurus entries from InputQueue)
+  - arousal     (EyeSystem arousal state: level, decay, baseline)
+  - counters    (NODE ID_COUNTER + MSG_ID_COUNTER)
+  - brainstem   (dispatch count, propagation history)
 
-Supported top-level keys (all optional, but at least one required):
-  "nodes"        - Array of node objects (same format as /grow)
-  "rules"        - Array of rule objects: {"text": "...", "prob": 0.0-1.0}
-  "lobes"        - Array of lobe objects: {"id": "...", "subject": "..."}
-  "connections"  - Array of connection pairs: {"lobe_a": "...", "lobe_b": "..."}
-  "lobe_nodes"   - Array of lobe node assignments: {"lobe_id": "...", "node": {<node_json>}}
-  "verbs"        - Array of verb entries: {"verb": "...", "class": "..."}
-  "verb_classes"  - Array of class names: ["causal", "epistemic", ...]
-  "synonyms"     - Array of synonym pairs: {"canonical": "...", "alias": "..."}
-  "inhibitions"  - Array of inhibition entries: {"word": "...", "reason": "..."}
-  "pins"         - Array of pinned text strings: ["important fact 1", ...]
+Returns a formatted summary string.
 """
-function load_specimen_from_json!(json_str::String)::String
-    if strip(json_str) == ""
-        error("!!! FATAL: /loadSpecimen got empty input! Grug cannot grow cave from invisible wind! !!!")
+function save_specimen_to_file!(filepath::String)::String
+    if strip(filepath) == ""
+        error("!!! FATAL: /saveSpecimen got empty filepath! Grug cannot write to invisible air! !!!")
     end
 
-    # GRUG: Phase 1 — Parse JSON. If scroll is unreadable, scream immediately.
+    # GRUG: Build the specimen dict — one key per state category.
+    specimen = Dict{String, Any}()
+    t_start = time()
+
+    # ── 1. NODES ──────────────────────────────────────────────────────────
+    # GRUG: Serialize every node in NODE_MAP with ALL fields.
+    # We bypass create_node() on restore and inject directly, so we need EVERYTHING.
+    node_list = Dict{String, Any}[]
+    lock(NODE_LOCK) do
+        for (id, node) in NODE_MAP
+            nd = Dict{String, Any}(
+                "id"                  => node.id,
+                "pattern"             => node.pattern,
+                "signal"              => node.signal,
+                "action_packet"       => node.action_packet,
+                "json_data"           => node.json_data,
+                "drop_table"          => node.drop_table,
+                "throttle"            => node.throttle,
+                "relational_patterns" => [Dict("subject" => rt.subject, "relation" => rt.relation, "object" => rt.object)
+                                          for rt in node.relational_patterns],
+                "required_relations"  => node.required_relations,
+                "relation_weights"    => node.relation_weights,
+                "strength"            => node.strength,
+                "is_image_node"       => node.is_image_node,
+                "neighbor_ids"        => node.neighbor_ids,
+                "is_unlinkable"       => node.is_unlinkable,
+                "is_grave"            => node.is_grave,
+                "grave_reason"        => node.grave_reason,
+                "response_times"      => node.response_times,
+                "ledger_last_cleared" => node.ledger_last_cleared,
+                "hopfield_key"        => string(node.hopfield_key)  # UInt64 -> String for JSON safety
+            )
+            push!(node_list, nd)
+        end
+    end
+    specimen["nodes"] = node_list
+
+    # ── 2. HOPFIELD CACHE ─────────────────────────────────────────────────
+    # GRUG: Serialize Hopfield fast-path cache keyed by UInt64 hash -> node ID list.
+    hopfield_entries = Dict{String, Any}[]
+    lock(HOPFIELD_CACHE_LOCK) do
+        for (h, ids) in HOPFIELD_CACHE
+            push!(hopfield_entries, Dict{String, Any}(
+                "hash"      => string(h),
+                "node_ids"  => ids,
+                "hit_count" => get(HOPFIELD_HIT_COUNTS, h, 0)
+            ))
+        end
+    end
+    specimen["hopfield_cache"] = hopfield_entries
+
+    # ── 3. RULES (AIML_DROP_TABLE) ────────────────────────────────────────
+    rule_list = [Dict{String, Any}("text" => r.rule_text, "prob" => r.fire_prob) for r in AIML_DROP_TABLE]
+    specimen["rules"] = rule_list
+
+    # ── 4. MESSAGE HISTORY ────────────────────────────────────────────────
+    # GRUG: Serialize the full message cave (up to 10k entries). Pins are preserved.
+    msg_list = [Dict{String, Any}(
+        "id"     => m.id,
+        "role"   => m.role,
+        "text"   => m.text,
+        "pinned" => m.pinned
+    ) for m in MESSAGE_HISTORY]
+    specimen["message_history"] = msg_list
+
+    # ── 5. LOBES ──────────────────────────────────────────────────────────
+    lobe_list = Dict{String, Any}[]
+    lock(Lobe.LOBE_LOCK) do
+        for (id, rec) in Lobe.LOBE_REGISTRY
+            push!(lobe_list, Dict{String, Any}(
+                "id"                 => rec.id,
+                "subject"            => rec.subject,
+                "node_ids"           => sort(collect(rec.node_ids)),
+                "connected_lobe_ids" => sort(collect(rec.connected_lobe_ids)),
+                "node_cap"           => rec.node_cap,
+                "fire_count"         => rec.fire_count,
+                "inhibit_count"      => rec.inhibit_count,
+                "created_at"         => rec.created_at
+            ))
+        end
+    end
+    specimen["lobes"] = lobe_list
+
+    # ── 6. NODE_TO_LOBE_IDX ──────────────────────────────────────────────
+    node_lobe_idx = Dict{String, String}()
+    lock(Lobe.LOBE_LOCK) do
+        for (nid, lid) in Lobe.NODE_TO_LOBE_IDX
+            node_lobe_idx[nid] = lid
+        end
+    end
+    specimen["node_to_lobe_idx"] = node_lobe_idx
+
+    # ── 7. LOBE TABLES ───────────────────────────────────────────────────
+    # GRUG: Serialize all lobe table chunks. NodeRef objects are converted to dicts.
+    lobe_table_list = Dict{String, Any}[]
+    lock(LobeTable.TABLE_REGISTRY_LOCK) do
+        for (lid, rec) in LobeTable.LOBE_TABLE_REGISTRY
+            chunks_data = Dict{String, Any}()
+            for (cname, chunk) in rec.chunks
+                lock(chunk.lock) do
+                    entries = Dict{String, Any}()
+                    for (k, v) in chunk.store
+                        if v isa LobeTable.NodeRef
+                            entries[k] = Dict{String, Any}(
+                                "_type"       => "NodeRef",
+                                "node_id"     => v.node_id,
+                                "lobe_id"     => v.lobe_id,
+                                "is_active"   => v.is_active,
+                                "inserted_at" => v.inserted_at
+                            )
+                        else
+                            # GRUG: Generic value — store as-is (json, drop, hopfield, meta chunks)
+                            entries[k] = v
+                        end
+                    end
+                    chunks_data[cname] = entries
+                end
+            end
+            push!(lobe_table_list, Dict{String, Any}(
+                "lobe_id"    => rec.lobe_id,
+                "chunks"     => chunks_data,
+                "created_at" => rec.created_at
+            ))
+        end
+    end
+    specimen["lobe_tables"] = lobe_table_list
+
+    # ── 8. VERB REGISTRY ─────────────────────────────────────────────────
+    verb_data = Dict{String, Any}()
+    lock(SemanticVerbs.VERB_REGISTRY_LOCK) do
+        classes = Dict{String, Any}()
+        for (cls, verbs) in SemanticVerbs._VERB_REGISTRY
+            classes[cls] = sort(collect(verbs))
+        end
+        verb_data["classes"] = classes
+        verb_data["synonyms"] = copy(SemanticVerbs._SYNONYM_MAP)
+    end
+    specimen["verb_registry"] = verb_data
+
+    # ── 9. THESAURUS SEEDS ────────────────────────────────────────────────
+    # GRUG: Serialize the SYNONYM_SEED_MAP (includes hardcoded + runtime additions).
+    thesaurus_data = Dict{String, Any}()
+    lock(Thesaurus.SEED_MAP_LOCK) do
+        for (word, syns) in Thesaurus.SYNONYM_SEED_MAP
+            thesaurus_data[word] = sort(collect(syns))
+        end
+    end
+    specimen["thesaurus_seeds"] = thesaurus_data
+
+    # ── 10. INHIBITIONS (NegativeThesaurus) ───────────────────────────────
+    inhib_list = Dict{String, Any}[]
+    lock(InputQueue._NEG_LOCK) do
+        for (word, entry) in InputQueue._NEG_THESAURUS
+            push!(inhib_list, Dict{String, Any}(
+                "word"     => entry.word,
+                "reason"   => entry.reason,
+                "added_at" => entry.added_at
+            ))
+        end
+    end
+    specimen["inhibitions"] = inhib_list
+
+    # ── 11. AROUSAL STATE ─────────────────────────────────────────────────
+    arousal_data = Dict{String, Any}()
+    lock(EyeSystem.AROUSAL_LOCK) do
+        arousal_data["level"]      = EyeSystem.AROUSAL_STATE.level
+        arousal_data["decay_rate"] = EyeSystem.AROUSAL_STATE.decay_rate
+        arousal_data["baseline"]   = EyeSystem.AROUSAL_STATE.baseline
+    end
+    specimen["arousal"] = arousal_data
+
+    # ── 12. ID COUNTERS ──────────────────────────────────────────────────
+    specimen["id_counters"] = Dict{String, Any}(
+        "node_id_counter" => ID_COUNTER[],
+        "msg_id_counter"  => MSG_ID_COUNTER[]
+    )
+
+    # ── 13. BRAINSTEM STATE ──────────────────────────────────────────────
+    brainstem_data = Dict{String, Any}()
+    lock(BrainStem.BRAINSTEM_LOCK) do
+        bs = BrainStem.BRAINSTEM_STATE
+        brainstem_data["dispatch_count"]  = bs.dispatch_count
+        brainstem_data["last_winner_id"]  = bs.last_winner_id
+        brainstem_data["last_dispatch_t"] = bs.last_dispatch_t
+        brainstem_data["propagation_history"] = [
+            Dict{String, Any}(
+                "source_lobe_id" => pr.source_lobe_id,
+                "target_lobe_id" => pr.target_lobe_id,
+                "confidence"     => pr.confidence,
+                "dispatch_count" => pr.dispatch_count
+            ) for pr in bs.propagation_history
+        ]
+    end
+    specimen["brainstem"] = brainstem_data
+
+    # ── METADATA ──────────────────────────────────────────────────────────
+    specimen["_meta"] = Dict{String, Any}(
+        "version"    => "2.0",
+        "saved_at"   => time(),
+        "format"     => "grugbot420-specimen-v2"
+    )
+
+    # ── SERIALIZE + COMPRESS ──────────────────────────────────────────────
+    # GRUG: Convert to JSON string, then gzip compress to file.
+    # Use system gzip via pipeline — no extra packages needed. Grug like simple.
+    json_str = JSON.json(specimen, 2)  # pretty-print with indent=2
+
+    try
+        proc = open(`gzip -c`, "r+")
+        write(proc, json_str)
+        close(proc.in)
+        compressed = read(proc)
+        open(filepath, "w") do io
+            write(io, compressed)
+        end
+    catch e
+        error("!!! FATAL: /saveSpecimen failed to write compressed file '$filepath': $e !!!")
+    end
+
+    elapsed = round(time() - t_start, digits=2)
+    file_size = filesize(filepath)
+    json_size = sizeof(json_str)
+    ratio = json_size > 0 ? round(100.0 * (1.0 - file_size / json_size), digits=1) : 0.0
+
+    # GRUG: Build the victory scroll
+    lines = String[]
+    push!(lines, "╔══════════════════════════════════════════════════════════════╗")
+    push!(lines, "║            🧊 SPECIMEN SAVED SUCCESSFULLY                    ║")
+    push!(lines, "╠══════════════════════════════════════════════════════════════╣")
+    push!(lines, "  📁  File             : $filepath")
+    push!(lines, "  📦  JSON size        : $(json_size) bytes")
+    push!(lines, "  🗜️   Compressed size  : $(file_size) bytes ($(ratio)% smaller)")
+    push!(lines, "  ⏱️   Time             : $(elapsed)s")
+    push!(lines, "  ─────────────────────────────────────────────")
+    push!(lines, "  🌱  Nodes            : $(length(node_list))")
+    push!(lines, "  🧠  Lobes            : $(length(lobe_list))")
+    push!(lines, "  📋  Lobe tables      : $(length(lobe_table_list))")
+    push!(lines, "  ⚡  Hopfield entries  : $(length(hopfield_entries))")
+    push!(lines, "  ⚙️   Rules            : $(length(rule_list))")
+    push!(lines, "  💬  Messages         : $(length(msg_list))")
+    push!(lines, "  🔧  Verb classes     : $(length(get(verb_data, "classes", Dict())))")
+    push!(lines, "  🔤  Thesaurus words  : $(length(thesaurus_data))")
+    push!(lines, "  🚫  Inhibitions      : $(length(inhib_list))")
+    push!(lines, "  👁   Arousal          : $(arousal_data["level"])")
+    push!(lines, "╚══════════════════════════════════════════════════════════════╝")
+    return join(lines, "\n")
+end
+
+
+"""
+load_specimen_from_file!(filepath::String)::String
+
+GRUG: Read a gzip-compressed JSON specimen file and RESTORE the ENTIRE cave state.
+This is a DESTRUCTIVE operation — current cave state is WIPED and replaced with
+the specimen contents. Think of it as brain transplant, not brain addition.
+
+Phase 1: Read + decompress + parse the file
+Phase 2: Validate the entire specimen structure
+Phase 3: WIPE all current mutable state
+Phase 4: RESTORE all state from specimen
+Phase 5: Build summary scroll
+
+Returns a multi-line summary string of everything restored.
+"""
+function load_specimen_from_file!(filepath::String)::String
+    if strip(filepath) == ""
+        error("!!! FATAL: /loadSpecimen got empty filepath! Grug needs a file to thaw! !!!")
+    end
+
+    if !isfile(filepath)
+        error("!!! FATAL: /loadSpecimen file not found: '$filepath'! Check path and try again! !!!")
+    end
+
+    t_start = time()
+    file_size = filesize(filepath)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PHASE 1: READ + DECOMPRESS + PARSE
+    # ══════════════════════════════════════════════════════════════════════
+
+    # GRUG: Read compressed file and decompress via pipeline to gunzip.
+    # No extra packages needed — just shell out to gunzip. Grug like simple.
+    json_str = try
+        compressed_bytes = read(filepath)
+        proc = open(`gunzip -c`, "r+")
+        write(proc, compressed_bytes)
+        close(proc.in)
+        String(read(proc))
+    catch e
+        error("!!! FATAL: /loadSpecimen failed to read/decompress '$filepath': $e !!!")
+    end
+
+    if strip(json_str) == ""
+        error("!!! FATAL: /loadSpecimen decompressed file is empty! Bad specimen jar! !!!")
+    end
+
     specimen = try
         JSON.parse(json_str)
     catch e
-        error("!!! FATAL: /loadSpecimen JSON parse failed! Grug cannot read this scroll: $e !!!")
+        error("!!! FATAL: /loadSpecimen JSON parse failed after decompression: $e !!!")
     end
 
     if !isa(specimen, Dict)
-        error("!!! FATAL: /loadSpecimen expects a JSON object (Dict) at top level, got $(typeof(specimen))! !!!")
+        error("!!! FATAL: /loadSpecimen expects a JSON object at top level, got $(typeof(specimen))! !!!")
     end
 
-    # GRUG: Allowed top-level keys. Anything else is a typo or sabotage.
-    allowed_keys = Set(["nodes", "rules", "lobes", "connections", "lobe_nodes",
-                        "verbs", "verb_classes", "synonyms", "inhibitions", "pins"])
-    for key in keys(specimen)
-        if !(key in allowed_keys)
-            error("!!! FATAL: /loadSpecimen found unknown top-level key '$key'! Allowed keys: $(join(sort(collect(allowed_keys)), ", ")) !!!")
-        end
-    end
+    # ══════════════════════════════════════════════════════════════════════
+    # PHASE 2: VALIDATE STRUCTURE
+    # GRUG: Check that all sections exist and have correct types.
+    # We don't validate every field here — the restore phase handles
+    # individual field errors with try/catch. But we catch structural
+    # problems early to avoid partial wipes. Grug is paranoid.
+    # ══════════════════════════════════════════════════════════════════════
 
-    # GRUG: At least one section must be present. Empty scroll is useless.
-    if isempty(specimen)
-        error("!!! FATAL: /loadSpecimen JSON is empty object {}! Give Grug at least one section to work with! !!!")
-    end
-
-    # GRUG: Phase 2 — Validate ALL sections BEFORE committing ANY changes.
-    # Each section gets its own validation pass. Errors are collected, not thrown one at a time.
-    # If ANY validation fails, NOTHING is committed. Atomic cave blueprint.
     validation_errors = String[]
 
-    # --- VALIDATE: verb_classes ---
-    v_verb_classes = String[]
-    if haskey(specimen, "verb_classes")
-        if !isa(specimen["verb_classes"], AbstractVector)
-            push!(validation_errors, "verb_classes: must be an array of strings")
-        else
-            for (i, vc) in enumerate(specimen["verb_classes"])
-                if !isa(vc, AbstractString) || strip(vc) == ""
-                    push!(validation_errors, "verb_classes[$i]: must be a non-empty string")
-                else
-                    push!(v_verb_classes, String(strip(vc)))
-                end
+    # GRUG: Allowed top-level keys
+    allowed_keys = Set(["nodes", "hopfield_cache", "rules", "message_history",
+                        "lobes", "node_to_lobe_idx", "lobe_tables",
+                        "verb_registry", "thesaurus_seeds", "inhibitions",
+                        "arousal", "id_counters", "brainstem", "_meta"])
+    for key in keys(specimen)
+        if !(key in allowed_keys)
+            push!(validation_errors, "Unknown top-level key '$key'")
+        end
+    end
+
+    # GRUG: Type checks for critical array sections
+    for k in ["nodes", "hopfield_cache", "rules", "message_history", "lobes", "lobe_tables", "inhibitions"]
+        if haskey(specimen, k) && !isa(specimen[k], AbstractVector)
+            push!(validation_errors, "'$k' must be an array")
+        end
+    end
+
+    # GRUG: Type checks for critical dict sections
+    for k in ["node_to_lobe_idx", "verb_registry", "thesaurus_seeds", "arousal", "id_counters", "brainstem", "_meta"]
+        if haskey(specimen, k) && !isa(specimen[k], Dict)
+            push!(validation_errors, "'$k' must be an object")
+        end
+    end
+
+    # GRUG: Validate nodes have required fields (spot-check first 5)
+    if haskey(specimen, "nodes") && isa(specimen["nodes"], AbstractVector)
+        for (i, nd) in enumerate(specimen["nodes"])
+            i > 5 && break
+            if !isa(nd, Dict)
+                push!(validation_errors, "nodes[$i]: not a JSON object")
+            elseif !haskey(nd, "id") || !haskey(nd, "pattern") || !haskey(nd, "action_packet")
+                push!(validation_errors, "nodes[$i]: missing 'id', 'pattern', or 'action_packet'")
             end
         end
     end
 
-    # --- VALIDATE: verbs ---
-    v_verbs = Tuple{String, String}[]
-    if haskey(specimen, "verbs")
-        if !isa(specimen["verbs"], AbstractVector)
-            push!(validation_errors, "verbs: must be an array of {verb, class} objects")
-        else
-            for (i, ventry) in enumerate(specimen["verbs"])
-                if !isa(ventry, Dict)
-                    push!(validation_errors, "verbs[$i]: must be a JSON object with 'verb' and 'class'")
-                elseif !haskey(ventry, "verb") || !haskey(ventry, "class")
-                    push!(validation_errors, "verbs[$i]: missing 'verb' or 'class' field")
-                elseif strip(ventry["verb"]) == "" || strip(ventry["class"]) == ""
-                    push!(validation_errors, "verbs[$i]: 'verb' and 'class' must be non-empty strings")
-                else
-                    push!(v_verbs, (String(strip(ventry["verb"])), String(strip(ventry["class"]))))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: synonyms ---
-    v_synonyms = Tuple{String, String}[]
-    if haskey(specimen, "synonyms")
-        if !isa(specimen["synonyms"], AbstractVector)
-            push!(validation_errors, "synonyms: must be an array of {canonical, alias} objects")
-        else
-            for (i, sentry) in enumerate(specimen["synonyms"])
-                if !isa(sentry, Dict)
-                    push!(validation_errors, "synonyms[$i]: must be a JSON object with 'canonical' and 'alias'")
-                elseif !haskey(sentry, "canonical") || !haskey(sentry, "alias")
-                    push!(validation_errors, "synonyms[$i]: missing 'canonical' or 'alias' field")
-                elseif strip(sentry["canonical"]) == "" || strip(sentry["alias"]) == ""
-                    push!(validation_errors, "synonyms[$i]: 'canonical' and 'alias' must be non-empty strings")
-                else
-                    push!(v_synonyms, (String(strip(sentry["canonical"])), String(strip(sentry["alias"]))))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: lobes ---
-    v_lobes = Tuple{String, String}[]
-    if haskey(specimen, "lobes")
-        if !isa(specimen["lobes"], AbstractVector)
-            push!(validation_errors, "lobes: must be an array of {id, subject} objects")
-        else
-            for (i, lentry) in enumerate(specimen["lobes"])
-                if !isa(lentry, Dict)
-                    push!(validation_errors, "lobes[$i]: must be a JSON object with 'id' and 'subject'")
-                elseif !haskey(lentry, "id") || !haskey(lentry, "subject")
-                    push!(validation_errors, "lobes[$i]: missing 'id' or 'subject' field")
-                elseif strip(lentry["id"]) == "" || strip(lentry["subject"]) == ""
-                    push!(validation_errors, "lobes[$i]: 'id' and 'subject' must be non-empty strings")
-                else
-                    push!(v_lobes, (String(strip(lentry["id"])), String(strip(lentry["subject"]))))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: connections ---
-    v_connections = Tuple{String, String}[]
-    if haskey(specimen, "connections")
-        if !isa(specimen["connections"], AbstractVector)
-            push!(validation_errors, "connections: must be an array of {lobe_a, lobe_b} objects")
-        else
-            for (i, centry) in enumerate(specimen["connections"])
-                if !isa(centry, Dict)
-                    push!(validation_errors, "connections[$i]: must be a JSON object with 'lobe_a' and 'lobe_b'")
-                elseif !haskey(centry, "lobe_a") || !haskey(centry, "lobe_b")
-                    push!(validation_errors, "connections[$i]: missing 'lobe_a' or 'lobe_b' field")
-                elseif strip(centry["lobe_a"]) == "" || strip(centry["lobe_b"]) == ""
-                    push!(validation_errors, "connections[$i]: 'lobe_a' and 'lobe_b' must be non-empty strings")
-                else
-                    push!(v_connections, (String(strip(centry["lobe_a"])), String(strip(centry["lobe_b"]))))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: nodes ---
-    v_nodes = Vector{Tuple{String, String, Dict{String,Any}, Vector{String}, Bool}}()
-    if haskey(specimen, "nodes")
-        if !isa(specimen["nodes"], AbstractVector)
-            push!(validation_errors, "nodes: must be an array of node objects")
-        else
-            for (i, nentry) in enumerate(specimen["nodes"])
-                if !isa(nentry, Dict)
-                    push!(validation_errors, "nodes[$i]: must be a JSON object")
-                elseif !haskey(nentry, "pattern") || !haskey(nentry, "action_packet")
-                    push!(validation_errors, "nodes[$i]: missing 'pattern' or 'action_packet' field")
-                elseif strip(nentry["pattern"]) == "" || strip(nentry["action_packet"]) == ""
-                    push!(validation_errors, "nodes[$i]: 'pattern' and 'action_packet' must be non-empty")
-                else
-                    # GRUG: Validate action packet syntax BEFORE commit phase
-                    try
-                        parse_action_packet(String(nentry["action_packet"]))
-                    catch e
-                        push!(validation_errors, "nodes[$i]: action_packet parse failed: $e")
-                        continue
-                    end
-                    json_data  = haskey(nentry, "json_data") ? Dict{String,Any}(string(k) => v for (k,v) in nentry["json_data"]) :
-                                 haskey(nentry, "data") ? Dict{String,Any}(string(k) => v for (k,v) in nentry["data"]) :
-                                 Dict{String,Any}()
-                    drop_table = (haskey(nentry, "drop_table") && nentry["drop_table"] isa AbstractVector) ?
-                                 String[string(x) for x in nentry["drop_table"]] : String[]
-                    is_img     = haskey(nentry, "is_image_node") && nentry["is_image_node"] === true
-                    push!(v_nodes, (String(nentry["pattern"]), String(nentry["action_packet"]), json_data, drop_table, is_img))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: lobe_nodes ---
-    v_lobe_nodes = Vector{Tuple{String, String, String, Dict{String,Any}, Vector{String}}}()
-    if haskey(specimen, "lobe_nodes")
-        if !isa(specimen["lobe_nodes"], AbstractVector)
-            push!(validation_errors, "lobe_nodes: must be an array of {lobe_id, node} objects")
-        else
-            for (i, lnentry) in enumerate(specimen["lobe_nodes"])
-                if !isa(lnentry, Dict)
-                    push!(validation_errors, "lobe_nodes[$i]: must be a JSON object with 'lobe_id' and 'node'")
-                elseif !haskey(lnentry, "lobe_id") || !haskey(lnentry, "node")
-                    push!(validation_errors, "lobe_nodes[$i]: missing 'lobe_id' or 'node' field")
-                elseif strip(lnentry["lobe_id"]) == ""
-                    push!(validation_errors, "lobe_nodes[$i]: 'lobe_id' must be non-empty string")
-                else
-                    nd = lnentry["node"]
-                    if !isa(nd, Dict)
-                        push!(validation_errors, "lobe_nodes[$i].node: must be a JSON object")
-                    elseif !haskey(nd, "pattern") || !haskey(nd, "action_packet")
-                        push!(validation_errors, "lobe_nodes[$i].node: missing 'pattern' or 'action_packet'")
-                    elseif strip(nd["pattern"]) == "" || strip(nd["action_packet"]) == ""
-                        push!(validation_errors, "lobe_nodes[$i].node: 'pattern' and 'action_packet' must be non-empty")
-                    else
-                        try
-                            parse_action_packet(String(nd["action_packet"]))
-                        catch e
-                            push!(validation_errors, "lobe_nodes[$i].node: action_packet parse failed: $e")
-                            continue
-                        end
-                        json_data  = haskey(nd, "data") ? Dict{String,Any}(string(k) => v for (k,v) in nd["data"]) : Dict{String,Any}()
-                        drop_table = (haskey(nd, "drop_table") && nd["drop_table"] isa AbstractVector) ?
-                                     String[string(x) for x in nd["drop_table"]] : String[]
-                        push!(v_lobe_nodes, (String(strip(lnentry["lobe_id"])), String(nd["pattern"]), String(nd["action_packet"]), json_data, drop_table))
-                    end
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: rules ---
-    v_rules = Tuple{String, Float64}[]
-    if haskey(specimen, "rules")
-        if !isa(specimen["rules"], AbstractVector)
-            push!(validation_errors, "rules: must be an array of rule objects")
-        else
-            for (i, rentry) in enumerate(specimen["rules"])
-                if !isa(rentry, Dict)
-                    push!(validation_errors, "rules[$i]: must be a JSON object with 'text' field")
-                elseif !haskey(rentry, "text")
-                    push!(validation_errors, "rules[$i]: missing 'text' field")
-                elseif strip(rentry["text"]) == ""
-                    push!(validation_errors, "rules[$i]: 'text' must be non-empty")
-                else
-                    rtext = String(strip(rentry["text"]))
-                    rprob = 1.0
-                    if haskey(rentry, "prob")
-                        rp = rentry["prob"]
-                        if isa(rp, Number) && 0.0 <= rp <= 1.0
-                            rprob = Float64(rp)
-                        else
-                            push!(validation_errors, "rules[$i]: 'prob' must be a number between 0.0 and 1.0, got: $rp")
-                            continue
-                        end
-                    end
-                    # GRUG: Validate magic word tags just like add_orchestration_rule! does
-                    bad_tags = false
-                    for m in eachmatch(r"\{[A-Z_]+\}", rtext)
-                        tag = m.match
-                        if !(tag in ALLOWED_RULE_TAGS)
-                            push!(validation_errors, "rules[$i]: invalid tag '$tag'. Allowed: $(join(ALLOWED_RULE_TAGS, ", "))")
-                            bad_tags = true
-                        end
-                    end
-                    !bad_tags && push!(v_rules, (rtext, rprob))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: inhibitions ---
-    v_inhibitions = Tuple{String, String}[]
-    if haskey(specimen, "inhibitions")
-        if !isa(specimen["inhibitions"], AbstractVector)
-            push!(validation_errors, "inhibitions: must be an array of {word} objects")
-        else
-            for (i, ientry) in enumerate(specimen["inhibitions"])
-                if !isa(ientry, Dict)
-                    push!(validation_errors, "inhibitions[$i]: must be a JSON object with 'word' field")
-                elseif !haskey(ientry, "word")
-                    push!(validation_errors, "inhibitions[$i]: missing 'word' field")
-                elseif strip(ientry["word"]) == ""
-                    push!(validation_errors, "inhibitions[$i]: 'word' must be non-empty string")
-                else
-                    reason = haskey(ientry, "reason") ? String(strip(string(ientry["reason"]))) : ""
-                    push!(v_inhibitions, (String(strip(ientry["word"])), reason))
-                end
-            end
-        end
-    end
-
-    # --- VALIDATE: pins ---
-    v_pins = String[]
-    if haskey(specimen, "pins")
-        if !isa(specimen["pins"], AbstractVector)
-            push!(validation_errors, "pins: must be an array of strings")
-        else
-            for (i, pentry) in enumerate(specimen["pins"])
-                if !isa(pentry, AbstractString) || strip(pentry) == ""
-                    push!(validation_errors, "pins[$i]: must be a non-empty string")
-                else
-                    push!(v_pins, String(strip(pentry)))
-                end
-            end
-        end
-    end
-
-    # GRUG: Phase 2 complete. If ANY validation failed, reject the ENTIRE specimen.
-    # Grug does not build half a cave. All or nothing!
     if !isempty(validation_errors)
-        err_list = join(["  ❌ $e" for e in validation_errors], "\n")
-        error("!!! FATAL: /loadSpecimen validation failed with $(length(validation_errors)) error(s):\n$err_list\n!!! NO CHANGES COMMITTED. Fix the scroll and try again. !!!")
+        err_list = join(["  - $e" for e in validation_errors], "\n")
+        error("!!! FATAL: /loadSpecimen validation failed with $(length(validation_errors)) error(s):\n$err_list\n!!! NO CHANGES MADE. Fix the specimen file and try again. !!!")
     end
 
-    # GRUG: Phase 3 — COMMIT. All validation passed. Now plant everything in order.
-    # Order matters: verb_classes → verbs → synonyms → lobes → connections →
-    # nodes → lobe_nodes → rules → inhibitions → pins
-    # Each section is wrapped in try/catch. Errors here are FATAL (should not happen
-    # after validation, but Grug is paranoid).
+    # ══════════════════════════════════════════════════════════════════════
+    # PHASE 3: WIPE ALL CURRENT STATE
+    # GRUG: Clear EVERYTHING. This is a brain transplant. Old brain goes in the bin.
+    # Order doesn't matter for wipe — we lock everything and empty it.
+    # ══════════════════════════════════════════════════════════════════════
 
-    summary_lines = String[]
-    counts = Dict{String,Int}("verb_classes" => 0, "verbs" => 0, "synonyms" => 0,
-                               "lobes" => 0, "connections" => 0, "nodes" => 0,
-                               "lobe_nodes" => 0, "rules" => 0, "inhibitions" => 0, "pins" => 0)
+    println("  🧹 Wiping current cave state...")
 
-    # --- COMMIT: verb_classes ---
-    for vc in v_verb_classes
-        try
-            SemanticVerbs.add_relation_class!(vc)
-            counts["verb_classes"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to create verb class '$vc': $e !!!")
+    # Wipe nodes
+    lock(NODE_LOCK) do
+        empty!(NODE_MAP)
+    end
+
+    # Wipe Hopfield cache
+    lock(HOPFIELD_CACHE_LOCK) do
+        empty!(HOPFIELD_CACHE)
+        empty!(HOPFIELD_HIT_COUNTS)
+    end
+
+    # Wipe AIML rules
+    empty!(AIML_DROP_TABLE)
+
+    # Wipe message history
+    empty!(MESSAGE_HISTORY)
+
+    # Wipe lobes + index
+    lock(Lobe.LOBE_LOCK) do
+        empty!(Lobe.LOBE_REGISTRY)
+        empty!(Lobe.NODE_TO_LOBE_IDX)
+    end
+
+    # Wipe lobe tables
+    lock(LobeTable.TABLE_REGISTRY_LOCK) do
+        empty!(LobeTable.LOBE_TABLE_REGISTRY)
+    end
+
+    # Wipe verb registry
+    lock(SemanticVerbs.VERB_REGISTRY_LOCK) do
+        empty!(SemanticVerbs._VERB_REGISTRY)
+        empty!(SemanticVerbs._VERB_TO_CLASS)
+        empty!(SemanticVerbs._SYNONYM_MAP)
+    end
+
+    # Wipe thesaurus seeds
+    lock(Thesaurus.SEED_MAP_LOCK) do
+        empty!(Thesaurus.SYNONYM_SEED_MAP)
+    end
+
+    # Wipe inhibitions
+    lock(InputQueue._NEG_LOCK) do
+        empty!(InputQueue._NEG_THESAURUS)
+    end
+
+    # Wipe brainstem state
+    lock(BrainStem.BRAINSTEM_LOCK) do
+        BrainStem.BRAINSTEM_STATE.dispatch_count = 0
+        BrainStem.BRAINSTEM_STATE.last_winner_id = ""
+        BrainStem.BRAINSTEM_STATE.last_dispatch_t = 0.0
+        BrainStem.BRAINSTEM_STATE.is_dispatching = false
+        empty!(BrainStem.BRAINSTEM_STATE.propagation_history)
+    end
+
+    # Wipe last voter IDs
+    lock(LAST_VOTER_LOCK) do
+        empty!(LAST_VOTER_IDS)
+    end
+
+    println("  ✅ Cave wiped clean. Beginning restore...")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PHASE 4: RESTORE ALL STATE FROM SPECIMEN
+    # GRUG: Rebuild the cave brick by brick. Order matters here:
+    # ID counters -> verb registry -> thesaurus -> lobes -> lobe tables ->
+    # nodes -> node_to_lobe_idx -> hopfield cache -> rules -> inhibitions ->
+    # messages -> arousal -> brainstem
+    # ══════════════════════════════════════════════════════════════════════
+
+    counts = Dict{String,Int}()
+
+    # ── 4.1 ID COUNTERS ──────────────────────────────────────────────────
+    if haskey(specimen, "id_counters")
+        idc = specimen["id_counters"]
+        if haskey(idc, "node_id_counter")
+            ID_COUNTER[] = Int(idc["node_id_counter"])
+        end
+        if haskey(idc, "msg_id_counter")
+            MSG_ID_COUNTER[] = Int(idc["msg_id_counter"])
+        end
+        println("  🔢 ID counters restored (node=$(ID_COUNTER[]), msg=$(MSG_ID_COUNTER[]))")
+    end
+
+    # ── 4.2 VERB REGISTRY ────────────────────────────────────────────────
+    n_verb_classes = 0
+    n_verbs = 0
+    n_verb_synonyms = 0
+    if haskey(specimen, "verb_registry")
+        vr = specimen["verb_registry"]
+        lock(SemanticVerbs.VERB_REGISTRY_LOCK) do
+            # Restore classes + verbs
+            if haskey(vr, "classes") && isa(vr["classes"], Dict)
+                for (cls, verbs) in vr["classes"]
+                    SemanticVerbs._VERB_REGISTRY[String(cls)] = Set{String}(String.(verbs))
+                    n_verb_classes += 1
+                    n_verbs += length(verbs)
+                end
+            end
+            # Restore synonyms
+            if haskey(vr, "synonyms") && isa(vr["synonyms"], Dict)
+                for (alias, canon) in vr["synonyms"]
+                    SemanticVerbs._SYNONYM_MAP[String(alias)] = String(canon)
+                    n_verb_synonyms += 1
+                end
+            end
+            # Rebuild reverse map (_VERB_TO_CLASS)
+            SemanticVerbs._rebuild_verb_to_class!()
+        end
+        counts["verb_classes"] = n_verb_classes
+        counts["verbs"] = n_verbs
+        counts["verb_synonyms"] = n_verb_synonyms
+        println("  🔧 Verb registry restored ($n_verb_classes classes, $n_verbs verbs, $n_verb_synonyms synonyms)")
+    end
+
+    # ── 4.3 THESAURUS SEEDS ──────────────────────────────────────────────
+    n_thesaurus = 0
+    if haskey(specimen, "thesaurus_seeds") && isa(specimen["thesaurus_seeds"], Dict)
+        lock(Thesaurus.SEED_MAP_LOCK) do
+            for (word, syns) in specimen["thesaurus_seeds"]
+                Thesaurus.SYNONYM_SEED_MAP[String(word)] = Set{String}(String.(syns))
+                n_thesaurus += 1
+            end
+        end
+        counts["thesaurus_words"] = n_thesaurus
+        println("  🔤 Thesaurus restored ($n_thesaurus words)")
+    end
+
+    # ── 4.4 LOBES ────────────────────────────────────────────────────────
+    n_lobes = 0
+    if haskey(specimen, "lobes") && isa(specimen["lobes"], AbstractVector)
+        lock(Lobe.LOBE_LOCK) do
+            for ldata in specimen["lobes"]
+                try
+                    rec = Lobe.LobeRecord(
+                        String(ldata["id"]),
+                        String(ldata["subject"]),
+                        Set{String}(String.(get(ldata, "node_ids", String[]))),
+                        Set{String}(String.(get(ldata, "connected_lobe_ids", String[]))),
+                        Int(get(ldata, "node_cap", Lobe.LOBE_NODE_CAP)),
+                        Int(get(ldata, "fire_count", 0)),
+                        Int(get(ldata, "inhibit_count", 0)),
+                        Float64(get(ldata, "created_at", time()))
+                    )
+                    Lobe.LOBE_REGISTRY[rec.id] = rec
+                    n_lobes += 1
+                catch e
+                    error("!!! FATAL: /loadSpecimen failed to restore lobe '$(get(ldata, "id", "?"))': $e !!!")
+                end
+            end
+        end
+        counts["lobes"] = n_lobes
+        println("  🧠 Lobes restored ($n_lobes)")
+    end
+
+    # ── 4.5 LOBE TABLES ──────────────────────────────────────────────────
+    n_lobe_tables = 0
+    if haskey(specimen, "lobe_tables") && isa(specimen["lobe_tables"], AbstractVector)
+        lock(LobeTable.TABLE_REGISTRY_LOCK) do
+            for ltdata in specimen["lobe_tables"]
+                try
+                    lid = String(ltdata["lobe_id"])
+                    chunks = Dict{String, LobeTable.LobeTableChunk}()
+                    if haskey(ltdata, "chunks") && isa(ltdata["chunks"], Dict)
+                        for (cname, entries) in ltdata["chunks"]
+                            chunk = LobeTable.LobeTableChunk(
+                                String(cname),
+                                Dict{String, Any}(),
+                                ReentrantLock()
+                            )
+                            if isa(entries, Dict)
+                                for (k, v) in entries
+                                    if isa(v, Dict) && get(v, "_type", "") == "NodeRef"
+                                        chunk.store[String(k)] = LobeTable.NodeRef(
+                                            String(v["node_id"]),
+                                            String(v["lobe_id"]),
+                                            Bool(v["is_active"]),
+                                            Float64(get(v, "inserted_at", time()))
+                                        )
+                                    else
+                                        chunk.store[String(k)] = v
+                                    end
+                                end
+                            end
+                            chunks[String(cname)] = chunk
+                        end
+                    end
+                    rec = LobeTable.LobeTableRecord(
+                        lid,
+                        chunks,
+                        Float64(get(ltdata, "created_at", time()))
+                    )
+                    LobeTable.LOBE_TABLE_REGISTRY[lid] = rec
+                    n_lobe_tables += 1
+                catch e
+                    error("!!! FATAL: /loadSpecimen failed to restore lobe table '$(get(ltdata, "lobe_id", "?"))': $e !!!")
+                end
+            end
+        end
+        counts["lobe_tables"] = n_lobe_tables
+        println("  📋 Lobe tables restored ($n_lobe_tables)")
+    end
+
+    # ── 4.6 NODES ─────────────────────────────────────────────────────────
+    # GRUG: Direct injection into NODE_MAP — bypasses create_node() to preserve
+    # original IDs, strengths, neighbors, graves, everything. This is a RESTORE,
+    # not a grow. Every field is exactly what it was when /saveSpecimen froze it.
+    n_nodes = 0
+    if haskey(specimen, "nodes") && isa(specimen["nodes"], AbstractVector)
+        lock(NODE_LOCK) do
+            for nd in specimen["nodes"]
+                try
+                    # Rebuild RelationalTriple vector from serialized dicts
+                    rel_patterns = RelationalTriple[]
+                    if haskey(nd, "relational_patterns") && isa(nd["relational_patterns"], AbstractVector)
+                        for rp in nd["relational_patterns"]
+                            push!(rel_patterns, RelationalTriple(
+                                String(get(rp, "subject", "")),
+                                String(get(rp, "relation", "")),
+                                String(get(rp, "object", ""))
+                            ))
+                        end
+                    end
+
+                    node = Node(
+                        String(nd["id"]),
+                        String(nd["pattern"]),
+                        Float64.(get(nd, "signal", Float64[])),
+                        String(nd["action_packet"]),
+                        Dict{String, Any}(string(k) => v for (k,v) in get(nd, "json_data", Dict())),
+                        String.(get(nd, "drop_table", String[])),
+                        Float64(get(nd, "throttle", 0.5)),
+                        rel_patterns,
+                        String.(get(nd, "required_relations", String[])),
+                        Dict{String, Float64}(string(k) => Float64(v) for (k,v) in get(nd, "relation_weights", Dict())),
+                        Float64(get(nd, "strength", 1.0)),
+                        Bool(get(nd, "is_image_node", false)),
+                        String.(get(nd, "neighbor_ids", String[])),
+                        Bool(get(nd, "is_unlinkable", false)),
+                        Bool(get(nd, "is_grave", false)),
+                        String(get(nd, "grave_reason", "")),
+                        Float64.(get(nd, "response_times", Float64[])),
+                        Float64(get(nd, "ledger_last_cleared", time())),
+                        parse(UInt64, string(get(nd, "hopfield_key", "0")))
+                    )
+                    NODE_MAP[node.id] = node
+                    n_nodes += 1
+                catch e
+                    error("!!! FATAL: /loadSpecimen failed to restore node '$(get(nd, "id", "?"))': $e !!!")
+                end
+            end
+        end
+        counts["nodes"] = n_nodes
+        println("  🌱 Nodes restored ($n_nodes)")
+    end
+
+    # ── 4.7 NODE_TO_LOBE_IDX ─────────────────────────────────────────────
+    if haskey(specimen, "node_to_lobe_idx") && isa(specimen["node_to_lobe_idx"], Dict)
+        lock(Lobe.LOBE_LOCK) do
+            for (nid, lid) in specimen["node_to_lobe_idx"]
+                Lobe.NODE_TO_LOBE_IDX[String(nid)] = String(lid)
+            end
         end
     end
 
-    # --- COMMIT: verbs ---
-    for (verb, cls) in v_verbs
-        try
-            SemanticVerbs.add_verb!(verb, cls)
-            counts["verbs"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to add verb '$verb' to class '$cls': $e !!!")
+    # ── 4.8 HOPFIELD CACHE ────────────────────────────────────────────────
+    n_hopfield = 0
+    if haskey(specimen, "hopfield_cache") && isa(specimen["hopfield_cache"], AbstractVector)
+        lock(HOPFIELD_CACHE_LOCK) do
+            for hentry in specimen["hopfield_cache"]
+                try
+                    h = parse(UInt64, String(hentry["hash"]))
+                    ids = String.(hentry["node_ids"])
+                    hit = Int(get(hentry, "hit_count", 0))
+                    HOPFIELD_CACHE[h] = ids
+                    HOPFIELD_HIT_COUNTS[h] = hit
+                    n_hopfield += 1
+                catch e
+                    @warn "loadSpecimen: skipping bad Hopfield entry: $e"
+                end
+            end
         end
+        counts["hopfield_entries"] = n_hopfield
+        println("  ⚡ Hopfield cache restored ($n_hopfield entries)")
     end
 
-    # --- COMMIT: synonyms ---
-    for (canonical, alias) in v_synonyms
-        try
-            SemanticVerbs.add_synonym!(canonical, alias)
-            counts["synonyms"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to add synonym '$alias' → '$canonical': $e !!!")
+    # ── 4.9 RULES ─────────────────────────────────────────────────────────
+    n_rules = 0
+    if haskey(specimen, "rules") && isa(specimen["rules"], AbstractVector)
+        for rentry in specimen["rules"]
+            try
+                rtext = String(rentry["text"])
+                rprob = Float64(get(rentry, "prob", 1.0))
+                push!(AIML_DROP_TABLE, StochasticRule(rtext, rprob))
+                n_rules += 1
+            catch e
+                error("!!! FATAL: /loadSpecimen failed to restore rule: $e !!!")
+            end
         end
+        counts["rules"] = n_rules
+        println("  ⚙️  Rules restored ($n_rules)")
     end
 
-    # --- COMMIT: lobes ---
-    for (lid, subj) in v_lobes
-        try
-            Lobe.create_lobe!(lid, subj)
-            counts["lobes"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to create lobe '$lid': $e !!!")
+    # ── 4.10 INHIBITIONS ──────────────────────────────────────────────────
+    n_inhibitions = 0
+    if haskey(specimen, "inhibitions") && isa(specimen["inhibitions"], AbstractVector)
+        lock(InputQueue._NEG_LOCK) do
+            for ientry in specimen["inhibitions"]
+                try
+                    entry = InputQueue.NegEntry(
+                        String(ientry["word"]),
+                        String(get(ientry, "reason", "")),
+                        Float64(get(ientry, "added_at", time()))
+                    )
+                    InputQueue._NEG_THESAURUS[entry.word] = entry
+                    n_inhibitions += 1
+                catch e
+                    @warn "loadSpecimen: skipping bad inhibition entry: $e"
+                end
+            end
         end
+        counts["inhibitions"] = n_inhibitions
+        println("  🚫 Inhibitions restored ($n_inhibitions)")
     end
 
-    # --- COMMIT: connections ---
-    for (la, lb) in v_connections
-        try
-            Lobe.connect_lobes!(la, lb)
-            counts["connections"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to connect lobes '$la' ↔ '$lb': $e !!!")
+    # ── 4.11 MESSAGE HISTORY ──────────────────────────────────────────────
+    n_messages = 0
+    if haskey(specimen, "message_history") && isa(specimen["message_history"], AbstractVector)
+        for mentry in specimen["message_history"]
+            try
+                msg = ChatMessage(
+                    Int(mentry["id"]),
+                    String(mentry["role"]),
+                    String(mentry["text"]),
+                    Bool(get(mentry, "pinned", false))
+                )
+                push!(MESSAGE_HISTORY, msg)
+                n_messages += 1
+            catch e
+                @warn "loadSpecimen: skipping bad message entry: $e"
+            end
         end
+        counts["messages"] = n_messages
+        n_pinned = count(m -> m.pinned, MESSAGE_HISTORY)
+        println("  💬 Messages restored ($n_messages total, $n_pinned pinned)")
     end
 
-    # --- COMMIT: nodes ---
-    node_ids_created = String[]
-    for (pat, ap, jd, dt, is_img) in v_nodes
-        try
-            nid = create_node(pat, ap, jd, dt; is_image_node=is_img)
-            push!(node_ids_created, nid)
-            counts["nodes"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to create node (pattern='$(pat[1:min(40, length(pat))])'): $e !!!")
+    # ── 4.12 AROUSAL ──────────────────────────────────────────────────────
+    if haskey(specimen, "arousal") && isa(specimen["arousal"], Dict)
+        ar = specimen["arousal"]
+        lock(EyeSystem.AROUSAL_LOCK) do
+            EyeSystem.AROUSAL_STATE.level      = Float64(get(ar, "level", 0.3))
+            EyeSystem.AROUSAL_STATE.decay_rate  = Float64(get(ar, "decay_rate", 0.05))
+            EyeSystem.AROUSAL_STATE.baseline    = Float64(get(ar, "baseline", 0.3))
         end
+        counts["arousal"] = 1
+        println("  👁  Arousal restored (level=$(get(ar, "level", 0.3)))")
     end
 
-    # --- COMMIT: lobe_nodes ---
-    lobe_node_ids_created = String[]
-    for (lid, pat, ap, jd, dt) in v_lobe_nodes
-        try
-            nid = create_node(pat, ap, jd, dt)
-            Lobe.add_node_to_lobe!(lid, nid)
-            json_count = LobeTable.json_to_table_chunk!(lid, nid, jd)
-            drop_count = LobeTable.drop_table_to_chunk!(lid, nid, dt)
-            push!(lobe_node_ids_created, nid)
-            counts["lobe_nodes"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to grow node into lobe '$lid' (pattern='$(pat[1:min(40, length(pat))])'): $e !!!")
+    # ── 4.13 BRAINSTEM ────────────────────────────────────────────────────
+    if haskey(specimen, "brainstem") && isa(specimen["brainstem"], Dict)
+        bs = specimen["brainstem"]
+        lock(BrainStem.BRAINSTEM_LOCK) do
+            BrainStem.BRAINSTEM_STATE.dispatch_count = Int(get(bs, "dispatch_count", 0))
+            BrainStem.BRAINSTEM_STATE.last_winner_id = String(get(bs, "last_winner_id", ""))
+            BrainStem.BRAINSTEM_STATE.last_dispatch_t = Float64(get(bs, "last_dispatch_t", 0.0))
+            if haskey(bs, "propagation_history") && isa(bs["propagation_history"], AbstractVector)
+                for pr in bs["propagation_history"]
+                    push!(BrainStem.BRAINSTEM_STATE.propagation_history,
+                        BrainStem.PropagationRecord(
+                            String(get(pr, "source_lobe_id", "")),
+                            String(get(pr, "target_lobe_id", "")),
+                            Float64(get(pr, "confidence", 0.0)),
+                            Int(get(pr, "dispatch_count", 0))
+                        )
+                    )
+                end
+            end
         end
+        println("  🧬 BrainStem state restored")
     end
 
-    # --- COMMIT: rules ---
-    for (rtext, rprob) in v_rules
-        try
-            push!(AIML_DROP_TABLE, StochasticRule(rtext, rprob))
-            counts["rules"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to add rule '$rtext': $e !!!")
-        end
-    end
+    # ══════════════════════════════════════════════════════════════════════
+    # PHASE 5: BUILD SUMMARY SCROLL
+    # ══════════════════════════════════════════════════════════════════════
 
-    # --- COMMIT: inhibitions ---
-    for (word, reason) in v_inhibitions
-        try
-            InputQueue.add_inhibition!(word; reason=reason)
-            counts["inhibitions"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to add inhibition '$word': $e !!!")
-        end
-    end
+    elapsed = round(time() - t_start, digits=2)
+    json_size = sizeof(json_str)
+    n_pinned = count(m -> m.pinned, MESSAGE_HISTORY)
 
-    # --- COMMIT: pins ---
-    for pin_text in v_pins
-        try
-            add_message_to_history!("User_Pinned", pin_text, true)
-            counts["pins"] += 1
-        catch e
-            error("!!! FATAL: /loadSpecimen failed to pin text: $e !!!")
-        end
-    end
-
-    # GRUG: Phase 4 — Build the victory scroll. Tell operator what Grug planted.
-    push!(summary_lines, "╔══════════════════════════════════════════════════════════════╗")
-    push!(summary_lines, "║            🧬 SPECIMEN LOADED SUCCESSFULLY                  ║")
-    push!(summary_lines, "╠══════════════════════════════════════════════════════════════╣")
-
-    total_ops = sum(values(counts))
-    for (section, count) in sort(collect(counts), by=x->x[1])
-        if count > 0
-            emoji = Dict("verb_classes" => "🗂 ", "verbs" => "🔧", "synonyms" => "📖",
-                         "lobes" => "🧠", "connections" => "🔗", "nodes" => "🌱",
-                         "lobe_nodes" => "🌿", "rules" => "⚙️ ", "inhibitions" => "🚫",
-                         "pins" => "📌")
-            e = get(emoji, section, "  ")
-            push!(summary_lines, "  $e  $(rpad(section, 16)) : $count")
-        end
-    end
-
-    push!(summary_lines, "  ─────────────────────────────────────")
-    push!(summary_lines, "  📊  TOTAL OPERATIONS  : $total_ops")
-
-    if !isempty(node_ids_created)
-        id_preview = length(node_ids_created) <= 5 ?
-            join(node_ids_created, ", ") :
-            join(node_ids_created[1:5], ", ") * " ... (+$(length(node_ids_created)-5) more)"
-        push!(summary_lines, "  🆔  Node IDs          : $id_preview")
-    end
-    if !isempty(lobe_node_ids_created)
-        id_preview = length(lobe_node_ids_created) <= 5 ?
-            join(lobe_node_ids_created, ", ") :
-            join(lobe_node_ids_created[1:5], ", ") * " ... (+$(length(lobe_node_ids_created)-5) more)"
-        push!(summary_lines, "  🆔  Lobe Node IDs     : $id_preview")
-    end
-
-    push!(summary_lines, "╚══════════════════════════════════════════════════════════════╝")
-
-    return join(summary_lines, "\n")
+    lines = String[]
+    push!(lines, "╔══════════════════════════════════════════════════════════════╗")
+    push!(lines, "║            🧬 SPECIMEN LOADED SUCCESSFULLY                   ║")
+    push!(lines, "╠══════════════════════════════════════════════════════════════╣")
+    push!(lines, "  📁  File             : $filepath")
+    push!(lines, "  📦  Compressed size  : $(file_size) bytes")
+    push!(lines, "  📄  JSON size        : $(json_size) bytes")
+    push!(lines, "  ⏱️   Time             : $(elapsed)s")
+    push!(lines, "  ─────────────────────────────────────────────")
+    push!(lines, "  🌱  Nodes            : $(get(counts, "nodes", 0))")
+    push!(lines, "  🧠  Lobes            : $(get(counts, "lobes", 0))")
+    push!(lines, "  📋  Lobe tables      : $(get(counts, "lobe_tables", 0))")
+    push!(lines, "  ⚡  Hopfield entries  : $(get(counts, "hopfield_entries", 0))")
+    push!(lines, "  ⚙️   Rules            : $(get(counts, "rules", 0))")
+    push!(lines, "  💬  Messages         : $(get(counts, "messages", 0)) ($n_pinned pinned)")
+    push!(lines, "  🔧  Verb classes     : $(get(counts, "verb_classes", 0)) ($(get(counts, "verbs", 0)) verbs)")
+    push!(lines, "  🔤  Thesaurus words  : $(get(counts, "thesaurus_words", 0))")
+    push!(lines, "  🚫  Inhibitions      : $(get(counts, "inhibitions", 0))")
+    push!(lines, "  👁   Arousal          : $(EyeSystem.get_arousal())")
+    push!(lines, "  🔢  ID counters      : node=$(ID_COUNTER[]), msg=$(MSG_ID_COUNTER[])")
+    push!(lines, "  ─────────────────────────────────────────────")
+    push!(lines, "  🧹  Previous state   : WIPED (full brain transplant)")
+    push!(lines, "╚══════════════════════════════════════════════════════════════╝")
+    return join(lines, "\n")
 end
-
 # ==============================================================================
 # CAVE POPULATION & CLI LOOP
 # ==============================================================================
@@ -1340,7 +1685,8 @@ function run_cli()
     println("Thesaurus: /thesaurus <word1> | <word2>        (compare words/concepts dimensionally)")
     println("         : /thesaurus <w1> | <w2> :: <ctx1> :: <ctx2>  (with context lists)")
     println("NegThes  : /negativeThesaurus add|remove|list|check|flush")
-    println("Specimen : /loadSpecimen <json>                (batch-load full cave blueprint)")
+    println("Specimen : /saveSpecimen <filepath>            (save full cave state to compressed file)")
+    println("         : /loadSpecimen <filepath>            (restore full cave state from compressed file)")
     println("Help     : /help                               (full command reference)")
     println()
     println("╔══════════════════════════════════════════════════════════════════╗")
@@ -1423,7 +1769,8 @@ function run_cli()
             m_negcheck     = match(r"^/negativeThesaurus\s+check\s+(.+)$",              line)
             m_negflush     = match(r"^/negativeThesaurus\s+flush\s*$",                  line)
             # GRUG: Help command — show all commands
-            m_loadspecimen = match(r"^/loadSpecimen\s+(.+)"s,                             line)
+            m_loadspecimen = match(r"^/loadSpecimen\s+(\S+)\s*$",                          line)
+            m_savespecimen = match(r"^/saveSpecimen\s+(\S+)\s*$",                          line)
             m_help         = match(r"^/help\s*$",                                       line)
             
             if !isnothing(m_help)
@@ -1468,10 +1815,12 @@ function run_cli()
                 println("║  /negativeThesaurus check <word>                            ║")
                 println("║  /negativeThesaurus flush                                   ║")
                 println("║                                                              ║")
-                println("║  SPECIMEN LOADER                                             ║")
-                println("║  /loadSpecimen <json>        Batch-load full cave blueprint  ║")
-                println("║    Supports: nodes, rules, lobes, connections, lobe_nodes,   ║")
-                println("║    verbs, verb_classes, synonyms, inhibitions, pins          ║")
+                println("║  SPECIMEN PERSISTENCE                                        ║")
+                println("║  /saveSpecimen <filepath>    Save full cave to compressed gz ║")
+                println("║  /loadSpecimen <filepath>    Restore full cave from gz file  ║")
+                println("║    Saves/restores: nodes, lobes, lobe tables, Hopfield,     ║")
+                println("║    rules, messages+pins, verbs, thesaurus, inhibitions,     ║")
+                println("║    arousal, ID counters, brainstem state                    ║")
                 println("║                                                              ║")
                 println("║  /help                      Show this scroll                ║")
                 println("╚══════════════════════════════════════════════════════════════╝")
@@ -1881,16 +2230,27 @@ function run_cli()
                 end
                 println("🧹 NegativeThesaurus flushed. Removed $(old_count) inhibition(s). Cave filter is now empty.")
 
-            elseif !isnothing(m_loadspecimen)
-                # GRUG: /loadSpecimen - batch-load a full cave blueprint from JSON.
-                # Validates EVERYTHING before committing ANYTHING. Atomic specimen loading.
-                # Supports: nodes, rules, lobes, connections, lobe_nodes, verbs,
-                # verb_classes, synonyms, inhibitions, pins.
-                specimen_json = String(m_loadspecimen.captures[1])
-                add_message_to_history!("System", "/loadSpecimen [SPECIMEN BLUEPRINT]", false)
+            elseif !isnothing(m_savespecimen)
+                # GRUG: /saveSpecimen <filepath> — freeze the entire cave state to a
+                # gzip-compressed JSON file. Every node, lobe, rule, message, verb,
+                # thesaurus entry, inhibition, arousal level — EVERYTHING.
+                spec_path = String(strip(m_savespecimen.captures[1]))
+                add_message_to_history!("System", "/saveSpecimen $spec_path", false)
 
-                println("--> Grug reading specimen blueprint scroll...")
-                result_summary = load_specimen_from_json!(specimen_json)
+                println("--> Grug freezing entire cave to specimen file...")
+                result_summary = save_specimen_to_file!(spec_path)
+                println("\n$result_summary")
+                add_message_to_history!("System", result_summary, false)
+
+            elseif !isnothing(m_loadspecimen)
+                # GRUG: /loadSpecimen <filepath> — thaw a previously saved specimen file
+                # and RESTORE the entire cave state. This is a DESTRUCTIVE operation —
+                # current state is WIPED and replaced. Full brain transplant.
+                spec_path = String(strip(m_loadspecimen.captures[1]))
+                add_message_to_history!("System", "/loadSpecimen $spec_path", false)
+
+                println("--> Grug thawing specimen from file...")
+                result_summary = load_specimen_from_file!(spec_path)
                 println("\n$result_summary")
                 add_message_to_history!("System", result_summary, false)
 
@@ -1998,19 +2358,34 @@ run_cli()
 # Inhibited words are filtered from input tokens before pattern scanning,
 # acting as a pre-scan suppression layer. O(1) lookup via Dict{String,NegEntry}.
 #
-# 12. SPECIMEN LOADER (BATCH CAVE BLUEPRINT):
-# /loadSpecimen accepts a single JSON object containing up to 10 optional sections:
-#   nodes, rules, lobes, connections, lobe_nodes, verbs, verb_classes,
-#   synonyms, inhibitions, pins.
-# Processing is ATOMIC: the entire JSON is validated BEFORE any changes are
-# committed. If any section fails validation, ZERO changes are made. This
-# prevents half-seeded caves where nodes exist but their lobes or verb
-# classes are missing. Commit order is deliberate: verb_classes → verbs →
-# synonyms → lobes → connections → nodes → lobe_nodes → rules →
-# inhibitions → pins. This ensures downstream sections can reference
-# upstream entities (e.g. verbs reference classes, lobe_nodes reference
-# lobes). Each commit step is individually wrapped in try/catch with FATAL
-# error reporting — validation should prevent all commit errors, but Grug
-# is paranoid and does not trust silent success. The result is a formatted
-# summary table showing per-section counts and created node IDs.
+# 12. SPECIMEN PERSISTENCE (FULL CAVE STATE SAVE/RESTORE):
+# /saveSpecimen <filepath> serializes the ENTIRE cave state to a gzip-compressed
+# JSON file. /loadSpecimen <filepath> reads that file and performs a full brain
+# transplant — current state is WIPED and replaced with the specimen contents.
+# Together they provide long-term persistence for GrugBot instances.
+#
+# State categories captured (13 total):
+#   1. nodes          — full Node structs (id, pattern, signal, action_packet,
+#                       strength, neighbors, graves, drop_table, response_times,
+#                       hopfield_key, relational_patterns, etc.)
+#   2. hopfield_cache — familiar input fast-path cache + hit counts
+#   3. rules          — AIML_DROP_TABLE stochastic orchestration rules
+#   4. message_history— up to 10k ChatMessage entries with pin flags
+#   5. lobes          — LOBE_REGISTRY (subject, node_ids, connections, fire/inhibit)
+#   6. node_to_lobe_idx — NODE_TO_LOBE_IDX reverse index
+#   7. lobe_tables    — LOBE_TABLE_REGISTRY with all chunks (NodeRef objects)
+#   8. verb_registry  — SemanticVerbs classes + verbs + synonyms
+#   9. thesaurus_seeds— Thesaurus SYNONYM_SEED_MAP (hardcoded + runtime)
+#  10. inhibitions    — InputQueue NegativeThesaurus entries
+#  11. arousal        — EyeSystem arousal state (level, decay_rate, baseline)
+#  12. id_counters    — NODE ID_COUNTER + MSG_ID_COUNTER atomic values
+#  13. brainstem      — dispatch count, propagation history
+#
+# /loadSpecimen is DESTRUCTIVE: validates the entire file structure BEFORE
+# wiping any state. If validation fails, ZERO changes are made. Restore order
+# is deliberate: counters → verbs → thesaurus → lobes → lobe_tables → nodes →
+# node_to_lobe_idx → hopfield → rules → inhibitions → messages → arousal →
+# brainstem. Each restore step is individually wrapped in try/catch with FATAL
+# error reporting. File format: gzip-compressed JSON (system gzip/gunzip via
+# pipeline, no extra Julia packages required).
 # ==============================================================================

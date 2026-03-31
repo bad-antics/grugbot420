@@ -626,6 +626,74 @@ function thesaurus_batch_compare(target::AbstractString, candidates::Vector{<:Ab
     return results
 end
 
+# ============================================================================
+# RUNTIME SEED SYNONYM REGISTRATION
+# GRUG: _SEED_SYNONYMS_RAW is hardcoded at load time. But /loadSpecimen and
+# future CLI commands need to add seed synonyms at runtime without restarting.
+# add_seed_synonym!() patches SYNONYM_SEED_MAP live — same bidirectional
+# insertion logic as _build_seed_map!(), just for one entry at a time.
+# ============================================================================
+
+const SEED_MAP_LOCK = ReentrantLock()
+
+"""
+add_seed_synonym!(canonical::AbstractString, synonyms::Vector{<:AbstractString})
+
+GRUG: Register a new seed synonym group at runtime.
+canonical is the root word. synonyms is the list of words that mean the same thing.
+Bidirectional: canonical→synonyms AND each synonym→canonical AND each synonym→other synonyms.
+Thread-safe via SEED_MAP_LOCK. No silent failures.
+"""
+function add_seed_synonym!(canonical::AbstractString, synonyms::Vector{<:AbstractString})
+    can = lowercase(strip(String(canonical)))
+    if isempty(can)
+        throw_thesaurus_error("Cannot add seed synonym with empty canonical word", "add_seed_synonym!")
+    end
+    if isempty(synonyms)
+        throw_thesaurus_error("Cannot add seed synonym with empty synonyms list for '$can'", "add_seed_synonym!")
+    end
+
+    syns = Set{String}()
+    for s in synonyms
+        cleaned = lowercase(strip(String(s)))
+        if isempty(cleaned)
+            throw_thesaurus_error("Cannot add empty synonym string for canonical '$can'", "add_seed_synonym!")
+        end
+        push!(syns, cleaned)
+    end
+
+    lock(SEED_MAP_LOCK) do
+        # GRUG: canonical -> all its synonyms
+        if !haskey(SYNONYM_SEED_MAP, can)
+            SYNONYM_SEED_MAP[can] = Set{String}()
+        end
+        union!(SYNONYM_SEED_MAP[can], syns)
+
+        # GRUG: each synonym -> canonical AND all other synonyms (full bidirectional)
+        for syn in syns
+            if !haskey(SYNONYM_SEED_MAP, syn)
+                SYNONYM_SEED_MAP[syn] = Set{String}()
+            end
+            push!(SYNONYM_SEED_MAP[syn], can)
+            # GRUG: Also add all other synonyms of the same canonical
+            others = filter(s -> s != syn, syns)
+            union!(SYNONYM_SEED_MAP[syn], others)
+        end
+    end
+
+    return length(syns)
+end
+
+"""
+seed_synonym_count()::Int
+
+GRUG: How many unique words are in the seed synonym map? For diagnostics.
+"""
+function seed_synonym_count()::Int
+    return length(SYNONYM_SEED_MAP)
+end
+
 # GRUG say: module done! Seed synonyms bridge structural gap. Gate filter ready for scan.
+# GRUG say: Runtime seeds via add_seed_synonym!() keep cave growing without restart.
 
 end # module Thesaurus

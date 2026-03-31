@@ -86,11 +86,12 @@ That's it. The engine seeds three boot nodes, prints a startup banner, and drops
 | `/negativeThesaurus check <word>` | Quick check if a word is currently inhibited. |
 | `/negativeThesaurus flush` | Clear all inhibitions at once. |
 
-### Specimen Loader
+### Specimen Persistence (Long-Term Storage)
 
 | Command | What it does |
 |---|---|
-| `/loadSpecimen <json>` | Batch-load an entire cave blueprint from a single JSON object. Validates everything before committing anything — atomic loading, no half-built caves. |
+| `/saveSpecimen <filepath>` | Freeze the entire cave state to a gzip-compressed JSON file. Every node, lobe, rule, message, verb, thesaurus entry, inhibition, arousal level — everything. |
+| `/loadSpecimen <filepath>` | Restore the entire cave state from a previously saved specimen file. **Destructive** — current state is wiped and replaced (full brain transplant). |
 
 ### Help
 
@@ -139,81 +140,58 @@ Nodes are the atomic unit of GrugBot. Each node has a pattern (the text it match
 
 ---
 
-## Loading a Full Specimen (`/loadSpecimen`)
+## Specimen Persistence (`/saveSpecimen` + `/loadSpecimen`)
 
-`/loadSpecimen` is the batch seeding command. Instead of planting nodes one at a time with `/grow`, defining rules with `/addRule`, and creating lobes with `/newLobe` separately, you hand GrugBot a single JSON blueprint that describes an entire cave topology. All sections are validated before anything is committed — if any part of the JSON is malformed, zero changes are made.
+GrugBot supports full long-term persistence via specimen files. A specimen file is a **gzip-compressed JSON** snapshot of the entire cave state — every node, lobe, rule, message, verb, thesaurus entry, inhibition, and more. Save your cave at any time, share it with others, or restore it later.
 
-**JSON schema (all top-level keys are optional, but at least one must be present):**
+### Saving
 
-```json
-{
-  "verb_classes": ["epistemic", "emotional"],
-  "verbs": [
-    {"verb": "believes", "class": "epistemic"},
-    {"verb": "doubts", "class": "epistemic"}
-  ],
-  "synonyms": [
-    {"canonical": "believes", "alias": "thinks"},
-    {"canonical": "causes", "alias": "triggers"}
-  ],
-  "lobes": [
-    {"id": "philosophy", "subject": "philosophical reasoning"},
-    {"id": "emotion", "subject": "emotional processing"}
-  ],
-  "connections": [
-    {"lobe_a": "philosophy", "lobe_b": "emotion"}
-  ],
-  "nodes": [
-    {
-      "pattern": "what is consciousness awareness",
-      "action_packet": "reason[dont hallucinate]^4 | ponder^2 | explain^1",
-      "data": {"system_prompt": "Deep philosophical analysis active."},
-      "drop_table": []
-    }
-  ],
-  "lobe_nodes": [
-    {
-      "lobe_id": "philosophy",
-      "node": {
-        "pattern": "free will determinism choice",
-        "action_packet": "analyze[dont assume]^3 | reason^2",
-        "data": {"system_prompt": "Metaphysics domain active."}
-      }
-    }
-  ],
-  "rules": [
-    {"text": "Always ground responses in {MISSION} context.", "prob": 1.0},
-    {"text": "Consider cross-domain lobe signals: {LOBE_CONTEXT}", "prob": 0.5}
-  ],
-  "inhibitions": [
-    {"word": "profanity", "reason": "content filter"},
-    {"word": "spam"}
-  ],
-  "pins": [
-    "Core directive: prioritize epistemic humility.",
-    "This specimen was seeded on 2025-01-15."
-  ]
-}
+```
+/saveSpecimen mycave.specimen.gz
 ```
 
-**Commit order:** `verb_classes` → `verbs` → `synonyms` → `lobes` → `connections` → `nodes` → `lobe_nodes` → `rules` → `inhibitions` → `pins`. This ensures downstream sections can reference upstream entities (verbs reference classes, lobe_nodes reference lobes, etc.).
+This freezes the entire cave state into `mycave.specimen.gz`. The file contains compressed JSON covering all 13 state categories.
 
-**Section reference:**
+### Loading (Restoring)
 
-| Section | Format | What it does |
+```
+/loadSpecimen mycave.specimen.gz
+```
+
+**This is a destructive operation** — current cave state is completely wiped and replaced with the specimen file contents. Think of it as a full brain transplant.
+
+The file is validated before any state is wiped. If validation fails, zero changes are made.
+
+### What gets saved/restored
+
+| # | State Category | Description |
 |---|---|---|
-| `verb_classes` | `["name", ...]` | Create new verb class buckets |
-| `verbs` | `[{verb, class}, ...]` | Add verbs to relation classes |
-| `synonyms` | `[{canonical, alias}, ...]` | Register synonym normalizations |
-| `lobes` | `[{id, subject}, ...]` | Create subject-specific partitions |
-| `connections` | `[{lobe_a, lobe_b}, ...]` | Link lobes bidirectionally |
-| `nodes` | `[{pattern, action_packet, data?, drop_table?, is_image_node?}, ...]` | Plant nodes (same format as `/grow`) |
-| `lobe_nodes` | `[{lobe_id, node: {pattern, action_packet, data?, drop_table?}}, ...]` | Grow nodes directly into lobes |
-| `rules` | `[{text, prob?}, ...]` | Add stochastic orchestration rules |
-| `inhibitions` | `[{word, reason?}, ...]` | Register NegativeThesaurus inhibitions |
-| `pins` | `["text", ...]` | Pin text to memory cave wall |
+| 1 | **nodes** | Full Node structs — id, pattern, signal, action_packet, strength, neighbors, graves, drop_table, response_times, hopfield_key, relational_patterns, throttle, json_data |
+| 2 | **hopfield_cache** | Familiar input fast-path cache with hit counts (UInt64 hash → node IDs) |
+| 3 | **rules** | AIML_DROP_TABLE stochastic orchestration rules (text + fire probability) |
+| 4 | **message_history** | Up to 10,000 ChatMessage entries with pin flags preserved |
+| 5 | **lobes** | LOBE_REGISTRY — subject, node_ids, connected_lobe_ids, fire/inhibit counts |
+| 6 | **node_to_lobe_idx** | NODE_TO_LOBE_IDX reverse index (node → lobe mapping) |
+| 7 | **lobe_tables** | LOBE_TABLE_REGISTRY with all chunks (nodes, json, drop, hopfield, meta) and NodeRef objects |
+| 8 | **verb_registry** | SemanticVerbs — all verb classes, verbs, and synonym normalizations |
+| 9 | **thesaurus_seeds** | Thesaurus SYNONYM_SEED_MAP (hardcoded defaults + runtime additions) |
+| 10 | **inhibitions** | InputQueue NegativeThesaurus entries (word, reason, timestamp) |
+| 11 | **arousal** | EyeSystem arousal state (level, decay_rate, baseline) |
+| 12 | **id_counters** | NODE ID_COUNTER and MSG_ID_COUNTER atomic values |
+| 13 | **brainstem** | BrainStem dispatch count and propagation history |
 
-On success, GrugBot prints a summary table showing per-section counts and created node IDs.
+### Restore order
+
+`id_counters` → `verb_registry` → `thesaurus_seeds` → `lobes` → `lobe_tables` → `nodes` → `node_to_lobe_idx` → `hopfield_cache` → `rules` → `inhibitions` → `message_history` → `arousal` → `brainstem`
+
+This ensures upstream entities exist before downstream references (e.g., lobes exist before nodes reference them).
+
+### File format
+
+- **Extension convention:** `.specimen.gz` (not enforced, any path works)
+- **Compression:** gzip (system `gzip`/`gunzip` via pipeline — no extra Julia packages)
+- **Content:** JSON with pretty-print indentation (human-readable when decompressed)
+- **Metadata:** `_meta` section records version, timestamp, and format identifier
 
 ---
 

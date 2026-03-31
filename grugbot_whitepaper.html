@@ -221,7 +221,7 @@ and self-maintaining phagy cycles.</p>
         <li><a href="#chatter">13. ChatterMode: Gossip Sessions</a></li>
         <li><a href="#semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</a></li>
         <li><a href="#action-tone">15. ActionTonePredictor: Input Classification</a></li>
-        <li><a href="#specimen-loader">16. Specimen Loader: Batch Cave Blueprint</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore</a> <span class="new-badge">UPDATED</span></li>
         <li><a href="#math">17. Formal Mathematics</a></li>
         <li><a href="#cli">18. CLI Command Reference</a></li>
         <li><a href="#files">19. File Reference</a></li>
@@ -721,121 +721,103 @@ misaligned nodes get <1.0. This biases voting toward contextually appropriate re
 
 <!-- ================================================================ -->
 <!-- ================================================================ -->
-<h2 id="specimen-loader">16. Specimen Loader: Batch Cave Blueprint <span class="new-badge">NEW</span></h2>
+<h2 id="specimen-persistence">16. Specimen Persistence: Full Cave Save/Restore <span class="new-badge">UPDATED</span></h2>
 
 <div class="grug-box">
-    <p>Grug tired of planting one rock at a time. <code>/grow</code> plants nodes. <code>/addRule</code> adds rules.
-    <code>/newLobe</code> makes lobes. But what if Grug wants to build WHOLE CAVE at once?
-    That is <code>/loadSpecimen</code>. One big scroll. Everything inside. Grug reads whole scroll first,
-    checks every word. If ONE word is wrong, Grug throws scroll away. No half-built caves!</p>
+    <p>Grug build cave for YEARS. Thousands of rocks. Hundreds of rules. Brain full of knowledge.
+    Then machine turns off. All gone? NO! Grug needs LONG-TERM STORAGE. <code>/saveSpecimen</code> freezes
+    the ENTIRE cave — every node, lobe, rule, message, verb, thesaurus entry — into one compressed file.
+    <code>/loadSpecimen</code> thaws it back. Full brain transplant. Like putting Grug's brain in a jar
+    and pouring it back into a new skull. Nothing lost!</p>
 </div>
 
 <h3>Purpose</h3>
-<p><code>/loadSpecimen</code> is the batch seeding command. It accepts a single JSON object that describes
-an entire cave topology — nodes, rules, lobes, connections, verbs, synonyms, inhibitions, and pinned
-memories — all at once. The command is <strong>atomic</strong>: the entire JSON is validated before any
-changes are committed. If any section fails validation, zero changes are made.</p>
+<p><code>/saveSpecimen</code> and <code>/loadSpecimen</code> provide full long-term persistence for GrugBot instances.
+A specimen file is a <strong>gzip-compressed JSON</strong> snapshot of the entire cave state. Save your cave at any
+time, share it with others, or restore it later on a different machine.</p>
 
-<h3>JSON Schema</h3>
-<p>All top-level keys are optional, but at least one must be present:</p>
-
+<h3>Commands</h3>
 <table>
-    <tr><th>Key</th><th>Type</th><th>Description</th></tr>
-    <tr><td><code>verb_classes</code></td><td>Array of strings</td><td>Create new verb class buckets (e.g. <code>"epistemic"</code>)</td></tr>
-    <tr><td><code>verbs</code></td><td>Array of <code>{verb, class}</code></td><td>Add verbs to relation classes</td></tr>
-    <tr><td><code>synonyms</code></td><td>Array of <code>{canonical, alias}</code></td><td>Register synonym normalizations</td></tr>
-    <tr><td><code>lobes</code></td><td>Array of <code>{id, subject}</code></td><td>Create subject-specific partitions</td></tr>
-    <tr><td><code>connections</code></td><td>Array of <code>{lobe_a, lobe_b}</code></td><td>Link lobes bidirectionally</td></tr>
-    <tr><td><code>nodes</code></td><td>Array of node objects</td><td>Plant nodes (same format as <code>/grow</code>)</td></tr>
-    <tr><td><code>lobe_nodes</code></td><td>Array of <code>{lobe_id, node}</code></td><td>Grow nodes directly into lobes</td></tr>
-    <tr><td><code>rules</code></td><td>Array of <code>{text, prob?}</code></td><td>Add stochastic orchestration rules</td></tr>
-    <tr><td><code>inhibitions</code></td><td>Array of <code>{word, reason?}</code></td><td>Register NegativeThesaurus inhibitions</td></tr>
-    <tr><td><code>pins</code></td><td>Array of strings</td><td>Pin text to memory cave wall</td></tr>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/saveSpecimen <filepath></code></td><td>Freeze entire cave state to a gzip-compressed JSON file</td></tr>
+    <tr><td><code>/loadSpecimen <filepath></code></td><td>Restore entire cave state from a specimen file (<strong>destructive</strong> — wipes current state)</td></tr>
 </table>
 
-<h3>Example</h3>
-<pre><code>/loadSpecimen {
-  "verb_classes": ["epistemic"],
-  "verbs": [{"verb": "believes", "class": "epistemic"}],
-  "synonyms": [{"canonical": "believes", "alias": "thinks"}],
-  "lobes": [{"id": "philosophy", "subject": "philosophical reasoning"}],
-  "connections": [{"lobe_a": "philosophy", "lobe_b": "emotion"}],
-  "nodes": [
-    {
-      "pattern": "what is consciousness awareness",
-      "action_packet": "reason[dont hallucinate]^4 | ponder^2",
-      "data": {"system_prompt": "Deep philosophical analysis active."},
-      "drop_table": []
-    }
-  ],
-  "lobe_nodes": [
-    {
-      "lobe_id": "philosophy",
-      "node": {
-        "pattern": "free will determinism choice",
-        "action_packet": "analyze[dont assume]^3 | reason^2",
-        "data": {"system_prompt": "Metaphysics domain."}
-      }
-    }
-  ],
-  "rules": [
-    {"text": "Ground responses in {MISSION} context.", "prob": 1.0},
-    {"text": "Cross-domain: {LOBE_CONTEXT}", "prob": 0.5}
-  ],
-  "inhibitions": [{"word": "spam", "reason": "content filter"}],
-  "pins": ["Core directive: epistemic humility."]
-}</code></pre>
+<h3>State Categories (13 total)</h3>
+<table>
+    <tr><th>#</th><th>Category</th><th>Description</th></tr>
+    <tr><td>1</td><td><strong>nodes</strong></td><td>Full Node structs — id, pattern, signal, action_packet, strength, neighbors, graves, drop_table, response_times, hopfield_key, relational_patterns, throttle, json_data</td></tr>
+    <tr><td>2</td><td><strong>hopfield_cache</strong></td><td>Familiar input fast-path cache with hit counts (UInt64 hash &rarr; node IDs)</td></tr>
+    <tr><td>3</td><td><strong>rules</strong></td><td>AIML_DROP_TABLE stochastic orchestration rules (text + fire probability)</td></tr>
+    <tr><td>4</td><td><strong>message_history</strong></td><td>Up to 10,000 ChatMessage entries with pin flags preserved</td></tr>
+    <tr><td>5</td><td><strong>lobes</strong></td><td>LOBE_REGISTRY — subject, node_ids, connected_lobe_ids, fire/inhibit counts</td></tr>
+    <tr><td>6</td><td><strong>node_to_lobe_idx</strong></td><td>NODE_TO_LOBE_IDX reverse index (node &rarr; lobe mapping)</td></tr>
+    <tr><td>7</td><td><strong>lobe_tables</strong></td><td>LOBE_TABLE_REGISTRY with all chunks and NodeRef objects</td></tr>
+    <tr><td>8</td><td><strong>verb_registry</strong></td><td>SemanticVerbs — all verb classes, verbs, and synonym normalizations</td></tr>
+    <tr><td>9</td><td><strong>thesaurus_seeds</strong></td><td>Thesaurus SYNONYM_SEED_MAP (hardcoded defaults + runtime additions)</td></tr>
+    <tr><td>10</td><td><strong>inhibitions</strong></td><td>InputQueue NegativeThesaurus entries (word, reason, timestamp)</td></tr>
+    <tr><td>11</td><td><strong>arousal</strong></td><td>EyeSystem arousal state (level, decay_rate, baseline)</td></tr>
+    <tr><td>12</td><td><strong>id_counters</strong></td><td>NODE ID_COUNTER and MSG_ID_COUNTER atomic values</td></tr>
+    <tr><td>13</td><td><strong>brainstem</strong></td><td>BrainStem dispatch count and propagation history</td></tr>
+</table>
 
-<h3>Processing Order</h3>
+<h3>Usage Example</h3>
+<pre><code># Save the current cave state
+/saveSpecimen mycave.specimen.gz
+
+# ... time passes, machine restarts, etc. ...
+
+# Restore the cave state (WIPES current state first)
+/loadSpecimen mycave.specimen.gz</code></pre>
+
+<h3>Processing Details</h3>
+
 <div class="academic-box">
-    <p>Commit order is deliberate to ensure downstream sections can reference upstream entities:</p>
+    <p><strong>Save process:</strong> Serializes all 13 state categories into a single JSON object, then
+    gzip-compresses via system <code>gzip</code> pipeline (no extra Julia packages). Pretty-printed JSON
+    with indent=2 for human readability when decompressed.</p>
+
+    <p><strong>Load process (5 phases):</strong></p>
     <ol>
-        <li><strong>verb_classes</strong> — create class buckets first</li>
-        <li><strong>verbs</strong> — add verbs to now-existing classes</li>
-        <li><strong>synonyms</strong> — register normalizations for now-existing verbs</li>
-        <li><strong>lobes</strong> — create partitions</li>
-        <li><strong>connections</strong> — link now-existing lobes</li>
-        <li><strong>nodes</strong> — plant free-standing nodes</li>
-        <li><strong>lobe_nodes</strong> — grow nodes into now-existing lobes</li>
-        <li><strong>rules</strong> — add orchestration rules (can reference any template tag)</li>
-        <li><strong>inhibitions</strong> — register input filters</li>
-        <li><strong>pins</strong> — pin permanent memory text</li>
+        <li><strong>Read + Decompress + Parse:</strong> Read gzip file, decompress via <code>gunzip</code>, parse JSON</li>
+        <li><strong>Validate Structure:</strong> Check all top-level keys and types. Spot-check node entries. If anything is wrong, reject the entire file — zero changes made.</li>
+        <li><strong>Wipe Current State:</strong> Lock and clear all 13 mutable state categories</li>
+        <li><strong>Restore All State:</strong> Rebuild in dependency order: counters &rarr; verbs &rarr; thesaurus &rarr; lobes &rarr; lobe_tables &rarr; nodes &rarr; node_to_lobe_idx &rarr; hopfield &rarr; rules &rarr; inhibitions &rarr; messages &rarr; arousal &rarr; brainstem</li>
+        <li><strong>Build Summary:</strong> Print formatted summary table with per-category counts</li>
     </ol>
 </div>
 
 <h3>Error Handling</h3>
 <div class="warning">
-    <strong>Atomic Validation:</strong> The entire JSON is validated in a single pass <em>before</em> any
-    changes are committed. All validation errors are collected and reported together. If any section
-    has any error, the entire specimen is rejected and zero changes are made. No half-seeded caves.
+    <strong>Atomic Validation:</strong> The entire specimen file is validated <em>before</em> any state is wiped.
+    If validation fails, the current cave state is completely untouched. No half-restored brains.
+    Each restore step is individually wrapped in try/catch with FATAL error reporting.
 </div>
 
-<p>Error categories:</p>
-<ul>
-    <li><strong>Parse errors:</strong> Invalid JSON syntax → immediate FATAL</li>
-    <li><strong>Schema errors:</strong> Unknown top-level keys, wrong types, missing required fields → collected and reported in batch</li>
-    <li><strong>Semantic errors:</strong> Invalid action packet syntax, invalid rule tags → caught during validation, not commit</li>
-    <li><strong>Commit errors:</strong> Should never occur after validation, but each commit step is individually wrapped in try/catch with FATAL reporting (Grug is paranoid)</li>
-</ul>
-
 <h3>Output</h3>
-<p>On success, a formatted summary table is printed showing per-section counts and created node IDs:</p>
-<pre><code>╔══════════════════════════════════════════════════════════════╗
-║            🧬 SPECIMEN LOADED SUCCESSFULLY                  ║
-╠══════════════════════════════════════════════════════════════╣
-  🔗  connections      : 1
-  🌿  lobe_nodes       : 1
-  🧠  lobes            : 1
-  🌱  nodes            : 1
-  📌  pins             : 1
-  ⚙️   rules            : 2
-  🔧  verbs            : 1
-  🗂   verb_classes     : 1
-  ─────────────────────────────────────
-  📊  TOTAL OPERATIONS  : 9
-  🆔  Node IDs          : node_3
-  🆔  Lobe Node IDs     : node_4
-╚══════════════════════════════════════════════════════════════╝</code></pre>
+<p>On save, a summary shows file sizes and compression ratio. On load, a summary shows per-category restore counts:</p>
+<pre><code>&#9556;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9559;
+&#9553;            &#129516; SPECIMEN LOADED SUCCESSFULLY                   &#9553;
+&#9568;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9571;
+  &#128193;  File             : mycave.specimen.gz
+  &#128230;  Compressed size  : 4521 bytes
+  &#128196;  JSON size        : 48230 bytes
+  &#9203;   Time             : 0.12s
+  &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
+  &#127793;  Nodes            : 42
+  &#129504;  Lobes            : 3
+  &#128203;  Lobe tables      : 3
+  &#9889;  Hopfield entries  : 15
+  &#9881;   Rules            : 5
+  &#128172;  Messages         : 128 (3 pinned)
+  &#128295;  Verb classes     : 4 (23 verbs)
+  &#128292;  Thesaurus words  : 87
+  &#128683;  Inhibitions      : 2
+  &#128065;   Arousal          : 0.45
+  &#128290;  ID counters      : node=42, msg=128
+  &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
+  &#129529;  Previous state   : WIPED (full brain transplant)
+&#9562;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9565;</code></pre>
 
 <!-- ================================================================ -->
 <h2 id="math">17. Formal Mathematics</h2>
@@ -934,10 +916,11 @@ changes are committed. If any section fails validation, zero changes are made.</
     <tr><td><code>/negativeThesaurus flush</code></td><td>Clear all inhibitions</td></tr>
 </table>
 
-<h3>Specimen Loader <span class="new-badge">NEW</span></h3>
+<h3>Specimen Persistence <span class="new-badge">UPDATED</span></h3>
 <table>
     <tr><th>Command</th><th>Description</th></tr>
-    <tr><td><code>/loadSpecimen <json></code></td><td>Batch-load full cave blueprint. Atomic: validates all sections before committing any changes. Supports nodes, rules, lobes, connections, lobe_nodes, verbs, verb_classes, synonyms, inhibitions, pins.</td></tr>
+    <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 13 state categories.</td></tr>
+    <tr><td><code>/loadSpecimen <filepath></code></td><td>Restore full cave state from specimen file. Destructive: wipes current state first. Validates before wiping.</td></tr>
 </table>
 
 <!-- ================================================================ -->
