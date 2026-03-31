@@ -221,10 +221,11 @@ and self-maintaining phagy cycles.</p>
         <li><a href="#chatter">13. ChatterMode: Gossip Sessions</a></li>
         <li><a href="#semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</a></li>
         <li><a href="#action-tone">15. ActionTonePredictor: Input Classification</a></li>
-        <li><a href="#math">16. Formal Mathematics</a></li>
-        <li><a href="#cli">17. CLI Command Reference</a></li>
-        <li><a href="#files">18. File Reference</a></li>
-        <li><a href="#testing">19. Test Suite</a></li>
+        <li><a href="#specimen-loader">16. Specimen Loader: Batch Cave Blueprint</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#math">17. Formal Mathematics</a></li>
+        <li><a href="#cli">18. CLI Command Reference</a></li>
+        <li><a href="#files">19. File Reference</a></li>
+        <li><a href="#testing">20. Test Suite</a></li>
     </ul>
 </div>
 
@@ -719,7 +720,125 @@ Verb classes include <code>causal</code>, <code>spatial</code>, <code>temporal</
 misaligned nodes get <1.0. This biases voting toward contextually appropriate responses.</p>
 
 <!-- ================================================================ -->
-<h2 id="math">16. Formal Mathematics</h2>
+<!-- ================================================================ -->
+<h2 id="specimen-loader">16. Specimen Loader: Batch Cave Blueprint <span class="new-badge">NEW</span></h2>
+
+<div class="grug-box">
+    <p>Grug tired of planting one rock at a time. <code>/grow</code> plants nodes. <code>/addRule</code> adds rules.
+    <code>/newLobe</code> makes lobes. But what if Grug wants to build WHOLE CAVE at once?
+    That is <code>/loadSpecimen</code>. One big scroll. Everything inside. Grug reads whole scroll first,
+    checks every word. If ONE word is wrong, Grug throws scroll away. No half-built caves!</p>
+</div>
+
+<h3>Purpose</h3>
+<p><code>/loadSpecimen</code> is the batch seeding command. It accepts a single JSON object that describes
+an entire cave topology — nodes, rules, lobes, connections, verbs, synonyms, inhibitions, and pinned
+memories — all at once. The command is <strong>atomic</strong>: the entire JSON is validated before any
+changes are committed. If any section fails validation, zero changes are made.</p>
+
+<h3>JSON Schema</h3>
+<p>All top-level keys are optional, but at least one must be present:</p>
+
+<table>
+    <tr><th>Key</th><th>Type</th><th>Description</th></tr>
+    <tr><td><code>verb_classes</code></td><td>Array of strings</td><td>Create new verb class buckets (e.g. <code>"epistemic"</code>)</td></tr>
+    <tr><td><code>verbs</code></td><td>Array of <code>{verb, class}</code></td><td>Add verbs to relation classes</td></tr>
+    <tr><td><code>synonyms</code></td><td>Array of <code>{canonical, alias}</code></td><td>Register synonym normalizations</td></tr>
+    <tr><td><code>lobes</code></td><td>Array of <code>{id, subject}</code></td><td>Create subject-specific partitions</td></tr>
+    <tr><td><code>connections</code></td><td>Array of <code>{lobe_a, lobe_b}</code></td><td>Link lobes bidirectionally</td></tr>
+    <tr><td><code>nodes</code></td><td>Array of node objects</td><td>Plant nodes (same format as <code>/grow</code>)</td></tr>
+    <tr><td><code>lobe_nodes</code></td><td>Array of <code>{lobe_id, node}</code></td><td>Grow nodes directly into lobes</td></tr>
+    <tr><td><code>rules</code></td><td>Array of <code>{text, prob?}</code></td><td>Add stochastic orchestration rules</td></tr>
+    <tr><td><code>inhibitions</code></td><td>Array of <code>{word, reason?}</code></td><td>Register NegativeThesaurus inhibitions</td></tr>
+    <tr><td><code>pins</code></td><td>Array of strings</td><td>Pin text to memory cave wall</td></tr>
+</table>
+
+<h3>Example</h3>
+<pre><code>/loadSpecimen {
+  "verb_classes": ["epistemic"],
+  "verbs": [{"verb": "believes", "class": "epistemic"}],
+  "synonyms": [{"canonical": "believes", "alias": "thinks"}],
+  "lobes": [{"id": "philosophy", "subject": "philosophical reasoning"}],
+  "connections": [{"lobe_a": "philosophy", "lobe_b": "emotion"}],
+  "nodes": [
+    {
+      "pattern": "what is consciousness awareness",
+      "action_packet": "reason[dont hallucinate]^4 | ponder^2",
+      "data": {"system_prompt": "Deep philosophical analysis active."},
+      "drop_table": []
+    }
+  ],
+  "lobe_nodes": [
+    {
+      "lobe_id": "philosophy",
+      "node": {
+        "pattern": "free will determinism choice",
+        "action_packet": "analyze[dont assume]^3 | reason^2",
+        "data": {"system_prompt": "Metaphysics domain."}
+      }
+    }
+  ],
+  "rules": [
+    {"text": "Ground responses in {MISSION} context.", "prob": 1.0},
+    {"text": "Cross-domain: {LOBE_CONTEXT}", "prob": 0.5}
+  ],
+  "inhibitions": [{"word": "spam", "reason": "content filter"}],
+  "pins": ["Core directive: epistemic humility."]
+}</code></pre>
+
+<h3>Processing Order</h3>
+<div class="academic-box">
+    <p>Commit order is deliberate to ensure downstream sections can reference upstream entities:</p>
+    <ol>
+        <li><strong>verb_classes</strong> — create class buckets first</li>
+        <li><strong>verbs</strong> — add verbs to now-existing classes</li>
+        <li><strong>synonyms</strong> — register normalizations for now-existing verbs</li>
+        <li><strong>lobes</strong> — create partitions</li>
+        <li><strong>connections</strong> — link now-existing lobes</li>
+        <li><strong>nodes</strong> — plant free-standing nodes</li>
+        <li><strong>lobe_nodes</strong> — grow nodes into now-existing lobes</li>
+        <li><strong>rules</strong> — add orchestration rules (can reference any template tag)</li>
+        <li><strong>inhibitions</strong> — register input filters</li>
+        <li><strong>pins</strong> — pin permanent memory text</li>
+    </ol>
+</div>
+
+<h3>Error Handling</h3>
+<div class="warning">
+    <strong>Atomic Validation:</strong> The entire JSON is validated in a single pass <em>before</em> any
+    changes are committed. All validation errors are collected and reported together. If any section
+    has any error, the entire specimen is rejected and zero changes are made. No half-seeded caves.
+</div>
+
+<p>Error categories:</p>
+<ul>
+    <li><strong>Parse errors:</strong> Invalid JSON syntax → immediate FATAL</li>
+    <li><strong>Schema errors:</strong> Unknown top-level keys, wrong types, missing required fields → collected and reported in batch</li>
+    <li><strong>Semantic errors:</strong> Invalid action packet syntax, invalid rule tags → caught during validation, not commit</li>
+    <li><strong>Commit errors:</strong> Should never occur after validation, but each commit step is individually wrapped in try/catch with FATAL reporting (Grug is paranoid)</li>
+</ul>
+
+<h3>Output</h3>
+<p>On success, a formatted summary table is printed showing per-section counts and created node IDs:</p>
+<pre><code>╔══════════════════════════════════════════════════════════════╗
+║            🧬 SPECIMEN LOADED SUCCESSFULLY                  ║
+╠══════════════════════════════════════════════════════════════╣
+  🔗  connections      : 1
+  🌿  lobe_nodes       : 1
+  🧠  lobes            : 1
+  🌱  nodes            : 1
+  📌  pins             : 1
+  ⚙️   rules            : 2
+  🔧  verbs            : 1
+  🗂   verb_classes     : 1
+  ─────────────────────────────────────
+  📊  TOTAL OPERATIONS  : 9
+  🆔  Node IDs          : node_3
+  🆔  Lobe Node IDs     : node_4
+╚══════════════════════════════════════════════════════════════╝</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="math">17. Formal Mathematics</h2>
 
 <h3>Strength Dynamics</h3>
 <div class="math-section">
@@ -756,7 +875,7 @@ misaligned nodes get <1.0. This biases voting toward contextually appropriate re
 </div>
 
 <!-- ================================================================ -->
-<h2 id="cli">17. CLI Command Reference</h2>
+<h2 id="cli">18. CLI Command Reference</h2>
 
 <h3>Core Commands</h3>
 <table>
@@ -815,8 +934,14 @@ misaligned nodes get <1.0. This biases voting toward contextually appropriate re
     <tr><td><code>/negativeThesaurus flush</code></td><td>Clear all inhibitions</td></tr>
 </table>
 
+<h3>Specimen Loader <span class="new-badge">NEW</span></h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/loadSpecimen <json></code></td><td>Batch-load full cave blueprint. Atomic: validates all sections before committing any changes. Supports nodes, rules, lobes, connections, lobe_nodes, verbs, verb_classes, synonyms, inhibitions, pins.</td></tr>
+</table>
+
 <!-- ================================================================ -->
-<h2 id="files">18. File Reference</h2>
+<h2 id="files">19. File Reference</h2>
 
 <h3>Core Modules (15 files, ~8,789 lines)</h3>
 <table>
@@ -854,7 +979,7 @@ misaligned nodes get <1.0. This biases voting toward contextually appropriate re
 </table>
 
 <!-- ================================================================ -->
-<h2 id="testing">19. Test Suite</h2>
+<h2 id="testing">20. Test Suite</h2>
 
 <h3>Running Tests</h3>
 <pre><code># Run all tests

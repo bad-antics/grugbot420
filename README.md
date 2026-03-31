@@ -86,6 +86,12 @@ That's it. The engine seeds three boot nodes, prints a startup banner, and drops
 | `/negativeThesaurus check <word>` | Quick check if a word is currently inhibited. |
 | `/negativeThesaurus flush` | Clear all inhibitions at once. |
 
+### Specimen Loader
+
+| Command | What it does |
+|---|---|
+| `/loadSpecimen <json>` | Batch-load an entire cave blueprint from a single JSON object. Validates everything before committing anything — atomic loading, no half-built caves. |
+
 ### Help
 
 ```
@@ -130,6 +136,84 @@ Nodes are the atomic unit of GrugBot. Each node has a pattern (the text it match
 ```
 /grow {"nodes":[{"pattern":"sad unhappy depressed","action_packet":"comfort[dont dismiss]^3 | validate^2 | support^1","data":{"system_prompt":"Emotional support mode active."}}]}
 ```
+
+---
+
+## Loading a Full Specimen (`/loadSpecimen`)
+
+`/loadSpecimen` is the batch seeding command. Instead of planting nodes one at a time with `/grow`, defining rules with `/addRule`, and creating lobes with `/newLobe` separately, you hand GrugBot a single JSON blueprint that describes an entire cave topology. All sections are validated before anything is committed — if any part of the JSON is malformed, zero changes are made.
+
+**JSON schema (all top-level keys are optional, but at least one must be present):**
+
+```json
+{
+  "verb_classes": ["epistemic", "emotional"],
+  "verbs": [
+    {"verb": "believes", "class": "epistemic"},
+    {"verb": "doubts", "class": "epistemic"}
+  ],
+  "synonyms": [
+    {"canonical": "believes", "alias": "thinks"},
+    {"canonical": "causes", "alias": "triggers"}
+  ],
+  "lobes": [
+    {"id": "philosophy", "subject": "philosophical reasoning"},
+    {"id": "emotion", "subject": "emotional processing"}
+  ],
+  "connections": [
+    {"lobe_a": "philosophy", "lobe_b": "emotion"}
+  ],
+  "nodes": [
+    {
+      "pattern": "what is consciousness awareness",
+      "action_packet": "reason[dont hallucinate]^4 | ponder^2 | explain^1",
+      "data": {"system_prompt": "Deep philosophical analysis active."},
+      "drop_table": []
+    }
+  ],
+  "lobe_nodes": [
+    {
+      "lobe_id": "philosophy",
+      "node": {
+        "pattern": "free will determinism choice",
+        "action_packet": "analyze[dont assume]^3 | reason^2",
+        "data": {"system_prompt": "Metaphysics domain active."}
+      }
+    }
+  ],
+  "rules": [
+    {"text": "Always ground responses in {MISSION} context.", "prob": 1.0},
+    {"text": "Consider cross-domain lobe signals: {LOBE_CONTEXT}", "prob": 0.5}
+  ],
+  "inhibitions": [
+    {"word": "profanity", "reason": "content filter"},
+    {"word": "spam"}
+  ],
+  "pins": [
+    "Core directive: prioritize epistemic humility.",
+    "This specimen was seeded on 2025-01-15."
+  ]
+}
+```
+
+**Commit order:** `verb_classes` → `verbs` → `synonyms` → `lobes` → `connections` → `nodes` → `lobe_nodes` → `rules` → `inhibitions` → `pins`. This ensures downstream sections can reference upstream entities (verbs reference classes, lobe_nodes reference lobes, etc.).
+
+**Section reference:**
+
+| Section | Format | What it does |
+|---|---|---|
+| `verb_classes` | `["name", ...]` | Create new verb class buckets |
+| `verbs` | `[{verb, class}, ...]` | Add verbs to relation classes |
+| `synonyms` | `[{canonical, alias}, ...]` | Register synonym normalizations |
+| `lobes` | `[{id, subject}, ...]` | Create subject-specific partitions |
+| `connections` | `[{lobe_a, lobe_b}, ...]` | Link lobes bidirectionally |
+| `nodes` | `[{pattern, action_packet, data?, drop_table?, is_image_node?}, ...]` | Plant nodes (same format as `/grow`) |
+| `lobe_nodes` | `[{lobe_id, node: {pattern, action_packet, data?, drop_table?}}, ...]` | Grow nodes directly into lobes |
+| `rules` | `[{text, prob?}, ...]` | Add stochastic orchestration rules |
+| `inhibitions` | `[{word, reason?}, ...]` | Register NegativeThesaurus inhibitions |
+| `pins` | `["text", ...]` | Pin text to memory cave wall |
+
+On success, GrugBot prints a summary table showing per-section counts and created node IDs.
 
 ---
 
