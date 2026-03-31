@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GrugBot Neuromorphic Engine - Technical Whitepaper v7</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            line-height: 1.7;
+        }
+        h1 { color: #00ff88; font-size: 2.5em; border-bottom: 3px solid #00ff88; padding-bottom: 10px; }
+        h2 { color: #ff6b35; margin-top: 2em; border-left: 4px solid #ff6b35; padding-left: 15px; }
+        h3 { color: #00bfff; margin-top: 1.5em; }
+        h4 { color: #ffcc00; }
+
+        .grug-box {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid #00ff88;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            position: relative;
+        }
+        .grug-box::before {
+            content: "🦴 GRUG SAYS:";
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: #0a0a0f;
+            padding: 0 10px;
+            color: #00ff88;
+            font-weight: bold;
+        }
+
+        .academic-box {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0d2137 100%);
+            border: 2px solid #00bfff;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            position: relative;
+        }
+        .academic-box::before {
+            content: "📚 ACADEMIC:";
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: #0a0a0f;
+            padding: 0 10px;
+            color: #00bfff;
+            font-weight: bold;
+        }
+
+        .new-badge {
+            display: inline-block;
+            background: #00ff88;
+            color: #0a0a0f;
+            font-size: 0.7em;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+            letter-spacing: 1px;
+        }
+
+        .flow-chart {
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 30px;
+            margin: 30px 0;
+            text-align: center;
+            font-family: monospace;
+            overflow-x: auto;
+        }
+
+        .math-section {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+        .math-section code { color: #ff6b35; font-size: 1.1em; }
+
+        .lambda-block {
+            background: #161b22;
+            border-left: 4px solid #ffcc00;
+            padding: 15px 20px;
+            margin: 15px 0;
+            font-family: 'Fira Code', monospace;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td { border: 1px solid #333; padding: 12px; text-align: left; }
+        th { background: #1a1a2e; color: #00ff88; }
+        td { background: #0d1117; }
+        tr:hover td { background: #161b22; }
+
+        code { color: #ff6b35; background: #161b22; padding: 2px 6px; border-radius: 4px; }
+        pre { background: #0d1117; padding: 20px; border-radius: 8px; overflow-x: auto; border: 1px solid #30363d; }
+        pre code { background: none; padding: 0; }
+
+        .toc {
+            background: #111;
+            border: 1px solid #333;
+            padding: 25px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .toc ul { list-style: none; padding-left: 20px; }
+        .toc li { margin: 8px 0; }
+        .toc a { color: #00bfff; text-decoration: none; }
+        .toc a:hover { color: #00ff88; }
+
+        .warning {
+            background: #2d1f1f;
+            border-left: 4px solid #ff4444;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .tip {
+            background: #1f2d1f;
+            border-left: 4px solid #00ff88;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .info-box {
+            background: #1a1a2e;
+            border-left: 4px solid #ffcc00;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        blockquote {
+            border-left: 3px solid #ffcc00;
+            margin: 20px 0;
+            padding-left: 20px;
+            color: #aaa;
+            font-style: italic;
+        }
+
+        .signature {
+            text-align: right;
+            color: #666;
+            font-style: italic;
+            margin-top: 30px;
+        }
+
+        .intensity-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 6px 0;
+        }
+        .intensity-label { width: 100px; color: #ffcc00; font-family: monospace; font-size: 0.9em; }
+        .intensity-track { flex: 1; background: #1a1a2e; border-radius: 4px; height: 16px; overflow: hidden; }
+        .intensity-fill { height: 100%; border-radius: 4px; }
+        .intensity-pct { width: 60px; color: #888; font-size: 0.85em; text-align: right; }
+
+        .version-tag {
+            display: inline-block;
+            background: #ff6b35;
+            color: #0a0a0f;
+            font-size: 0.6em;
+            font-weight: bold;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+    </style>
+<script src="https://sites.super.myninja.ai/_assets/ninja-daytona-script.js"></script>
+</head>
+<body>
+
+<h1>🧠 GrugBot Neuromorphic Engine <span class="version-tag">v7</span></h1>
+
+<p><strong>Technical Whitepaper & Architecture Reference</strong><br>
+A Julia-based neuromorphic AI engine featuring stochastic pattern scanning, multi-lobe cognitive partitioning,
+lobe-aware prefrontal cortex orchestration, pipe-delimited action packets with inline negatives,
+and self-maintaining phagy cycles.</p>
+
+<div class="grug-box">
+    Cave brain think different from computer brain. Computer brain is IF-ELSE waterfall.
+    Cave brain is many rocks competing to be loudest. Loudest rock gets to talk.
+    Sometimes quiet rock gets lucky too (coinflip). That is how Grug think.
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+    <h3 style="margin-top:0;">Table of Contents</h3>
+    <ul>
+        <li><a href="#overview">1. Overview & Philosophy</a></li>
+        <li><a href="#architecture">2. System Architecture</a></li>
+        <li><a href="#nodes">3. Nodes: The Atomic Unit</a></li>
+        <li><a href="#action-packets">4. Action Packets v2 (Pipe-Delimited)</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#lobes">5. Lobes: Subject-Specific Partitions</a></li>
+        <li><a href="#lobe-tables">6. LobeTable: Per-Lobe Hash Storage</a></li>
+        <li><a href="#brainstem">7. BrainStem: Winner-Take-All Dispatch</a></li>
+        <li><a href="#prefrontal">8. Prefrontal Cortex: AIML Orchestration</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#input-queue">9. InputQueue & NegativeThesaurus</a> <span class="new-badge">NEW</span></li>
+        <li><a href="#thesaurus">10. Thesaurus: Dimensional Similarity Engine</a></li>
+        <li><a href="#phagy">11. Phagy Mode: Self-Maintenance</a></li>
+        <li><a href="#eye-system">12. EyeSystem: Visual Processing</a></li>
+        <li><a href="#chatter">13. ChatterMode: Gossip Sessions</a></li>
+        <li><a href="#semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</a></li>
+        <li><a href="#action-tone">15. ActionTonePredictor: Input Classification</a></li>
+        <li><a href="#math">16. Formal Mathematics</a></li>
+        <li><a href="#cli">17. CLI Command Reference</a></li>
+        <li><a href="#files">18. File Reference</a></li>
+        <li><a href="#testing">19. Test Suite</a></li>
+    </ul>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="overview">1. Overview & Philosophy</h2>
+
+<p>GrugBot is a neuromorphic AI engine written in Julia that models cognition through competing node populations
+rather than traditional neural networks. Each node is an independent pattern-matcher that votes for actions
+based on input similarity. The system exhibits emergent behavior through stochastic competition, strength-based
+natural selection, and cross-domain cascade activation across specialized brain lobes.</p>
+
+<h3>Core Design Principles</h3>
+
+<ul>
+    <li><strong>No Silent Failures</strong> &mdash; Every error is surfaced loudly. All catch blocks log via <code>@warn</code> or rethrow. Zero bare <code>catch</code> blocks.</li>
+    <li><strong>Stochastic Competition</strong> &mdash; Nodes compete via weighted coinflips, not deterministic ranking. The <code>@coinflip</code> macro drives all probabilistic decisions.</li>
+    <li><strong>Biological Metaphors</strong> &mdash; Lobes partition knowledge domains. BrainStem dispatches signals. Phagy cycles clean dead nodes. The prefrontal cortex (AIML) orchestrates cross-domain reasoning.</li>
+    <li><strong>GRUG Comment Style</strong> &mdash; All code uses inline cave-speak comments (<code># GRUG:</code>) plus academic footer blocks for formal documentation.</li>
+    <li><strong>Thread Safety</strong> &mdash; All shared state protected by <code>ReentrantLock</code>. Node map, queues, and thesauri are thread-safe.</li>
+</ul>
+
+<div class="academic-box">
+    The architecture draws from Hopfield networks (associative memory caching), competitive learning (strength-biased
+    selection), apoptosis (grave markers for failed nodes), and winner-take-all lateral inhibition (BrainStem dispatch).
+    The AIML orchestrator functions as a prefrontal cortex — a centralized executive that integrates votes from all
+    specialized cortical regions (lobes) into a unified response.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="architecture">2. System Architecture</h2>
+
+<div class="flow-chart">
+<pre style="color: #00ff88; text-align: left;">
+User Input
+    │
+    ▼
+┌─────────────────────────────────┐
+│  NegativeThesaurus Filter       │  ◄── Inhibit tokens before scan
+│  (InputQueue.jl)                │
+└─────────────┬───────────────────┘
+              │
+              ▼
+┌─────────────────────────────────┐
+│  ActionTonePredictor            │  ◄── Classify: query/command/assert
+│  + EyeSystem Arousal Nudge     │      Set arousal level
+└─────────────┬───────────────────┘
+              │
+              ▼
+┌─────────────────────────────────┐
+│  Pattern Scanner                │  ◄── Token overlap + relational triples
+│  (scan_specimens)               │      Hopfield cache check
+└─────────────┬───────────────────┘
+              │
+              ▼
+┌─────────────────────────────────┐
+│  scan_and_expand()              │  ◄── Pass 1: Drop-table co-activation (80%)
+│  Drop-Table + Lobe Cascade     │      Pass 2: Cross-lobe cascade (60%)
+└─────────────┬───────────────────┘
+              │
+              ▼
+┌─────────────────────────────────┐
+│  Vote Casting                   │  ◄── Each specimen casts weighted vote
+│  (select_action via @coinflip)  │      Strength-biased scan coinflip
+└─────────────┬───────────────────┘
+              │
+              ▼
+┌─────────────────────────────────┐
+│  Prefrontal Cortex (AIML)       │  ◄── Sort by confidence descending
+│  ephemeral_aiml_orchestrator    │      Sure/Unsure bucketing
+│  + Lobe-Aware Context           │      Stochastic rule evaluation
+│  + generate_aiml_payload        │      {LOBE_CONTEXT} injection
+└─────────────┬───────────────────┘
+              │
+              ▼
+        Response Output
+</pre>
+</div>
+
+<h3>Module Dependency Graph</h3>
+<table>
+    <tr><th>Module</th><th>File</th><th>Depends On</th><th>Lines</th></tr>
+    <tr><td>StochasticHelper</td><td>stochastichelper.jl</td><td>Distributions</td><td>168</td></tr>
+    <tr><td>PatternScanner</td><td>patternscanner.jl</td><td>—</td><td>249</td></tr>
+    <tr><td>ImageSDF</td><td>ImageSDF.jl</td><td>—</td><td>460</td></tr>
+    <tr><td>EyeSystem</td><td>EyeSystem.jl</td><td>—</td><td>443</td></tr>
+    <tr><td>ChatterMode</td><td>ChatterMode.jl</td><td>—</td><td>575</td></tr>
+    <tr><td>SemanticVerbs</td><td>SemanticVerbs.jl</td><td>—</td><td>391</td></tr>
+    <tr><td>ActionTonePredictor</td><td>ActionTonePredictor.jl</td><td>—</td><td>562</td></tr>
+    <tr><td>Engine</td><td>engine.jl</td><td>All above + JSON</td><td>1486</td></tr>
+    <tr><td>Lobe</td><td>Lobe.jl</td><td>—</td><td>381</td></tr>
+    <tr><td>LobeTable</td><td>LobeTable.jl</td><td>—</td><td>627</td></tr>
+    <tr><td>BrainStem</td><td>BrainStem.jl</td><td>Lobe</td><td>333</td></tr>
+    <tr><td>InputQueue</td><td>InputQueue.jl</td><td>—</td><td>256</td></tr>
+    <tr><td>Thesaurus</td><td>Thesaurus.jl</td><td>—</td><td>630</td></tr>
+    <tr><td>PhagyMode</td><td>PhagyMode.jl</td><td>—</td><td>611</td></tr>
+    <tr><td>Main (CLI)</td><td>Main.jl</td><td>All above</td><td>1485</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="nodes">3. Nodes: The Atomic Unit</h2>
+
+<p>Every piece of knowledge in GrugBot is stored as a <strong>Node</strong> — a mutable struct with a text pattern,
+action packet, strength score, neighbor links, and metadata.</p>
+
+<h3>Node Structure</h3>
+<pre><code>mutable struct Node
+    id::String                    # Unique ID (node_0, node_1, ...)
+    pattern::String               # Tokenized text pattern for matching
+    action_packet::String         # Pipe-delimited actions with weights + negatives
+    json_data::Dict{String,Any}   # Arbitrary metadata (system_prompt, etc.)
+    neighbor_ids::Vector{String}  # Linked nodes (max 4 → UNLINKABLE)
+    strength::Float64             # 0.0 – 10.0 (STRENGTH_CAP)
+    is_grave::Bool                # Dead node (negative reinforcement anchor)
+    grave_reason::String          # Why it died (GRAVED-SLOW, strength→0, etc.)
+    is_unlinkable::Bool           # At max neighbors (4)
+    hopfield_key::UInt64          # Associative memory hash
+    relational_patterns::Vector{RelationalTriple}
+    response_times::Vector{Float64}
+    is_image_node::Bool           # True if pattern is image SDF data
+end</code></pre>
+
+<h3>Node Lifecycle</h3>
+<table>
+    <tr><th>Event</th><th>Effect</th></tr>
+    <tr><td>Creation</td><td>Strength = 1.0, hopfield key computed, auto-latch neighbors (if >1000 nodes)</td></tr>
+    <tr><td>Vote cast</td><td><code>bump_strength!</code> on coinflip → strength increases toward cap</td></tr>
+    <tr><td><code>/wrong</code></td><td><code>penalize_strength!</code> on coinflip → strength decreases</td></tr>
+    <tr><td>Strength → 0</td><td>Marked <code>is_grave = true</code>, becomes negative anchor</td></tr>
+    <tr><td>Slow response</td><td>Avg time > 5s → GRAVED-SLOW</td></tr>
+    <tr><td>4 neighbors</td><td><code>is_unlinkable = true</code>, rejects further links</td></tr>
+</table>
+
+<h3>Strength-Biased Selection</h3>
+<div class="math-section">
+    <p>When scanning, each alive node gets a coinflip weighted by its strength:</p>
+    <code>P(activate) = 0.1 + 0.8 × (strength / STRENGTH_CAP)</code>
+    <p>Strength 0.0 → 10% chance. Strength 10.0 → 90% chance. This creates Darwinian selection pressure.</p>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="action-packets">4. Action Packets v2 (Pipe-Delimited) <span class="new-badge">v6</span></h2>
+
+<p>Action packets define what a node <em>does</em> when it wins a vote. Version 2 uses <strong>pipe-delimited format</strong>
+with inline negatives per action, allowing action names to contain commas.</p>
+
+<h3>Format</h3>
+<pre><code># Single action, default weight (1.0)
+"greet"
+
+# Single action with weight
+"reason^3.5"
+
+# Single action with inline negatives and weight
+"greet[dont frown, dont insult]^2"
+
+# Multiple actions, pipe-delimited
+"greet^3 | reason^2 | analyze^1"
+
+# Full format: pipe-delimited with mixed negatives
+"greet[dont frown, dont insult]^3 | welcome[dont be rude]^2 | smile^1"
+
+# Action names CAN contain commas (pipes are the delimiter)
+"plan, execute^2 | greet^1"</code></pre>
+
+<h3>Parser Return Values</h3>
+<pre><code>function parse_action_packet(packet::String)
+    → (positives, all_negatives, action_items)
+
+    positives    :: Vector{Tuple{String, Float64}}
+    # (action_name, weight) pairs for weighted selection
+
+    all_negatives :: Vector{String}
+    # Deduped union of ALL negatives across all actions
+
+    action_items :: Vector{Tuple{String, Float64, Vector{String}}}
+    # (action_name, weight, per_action_negatives) — full detail
+end</code></pre>
+
+<h3>Weighted Selection</h3>
+<div class="math-section">
+    <p><code>select_action(packet)</code> normalizes weights to probabilities and rolls a <code>Categorical</code> distribution via <code>@coinflip</code>:</p>
+    <code>P(action_i) = weight_i / Σ(weights)</code>
+    <p>For <code>"heavy^10 | light^1"</code>: P(heavy) ≈ 91%, P(light) ≈ 9%</p>
+</div>
+
+<h3>Inline Negatives</h3>
+<div class="grug-box">
+    Negatives tell Grug what NOT to do. Each action can have its own "dont" list inside square brackets.
+    When greet says <code>[dont frown, dont insult]</code>, those are constraints passed to the AIML generator
+    so the response avoids those behaviors. All negatives from all actions are also collected into a flat
+    list for backward compatibility with the vote system.
+</div>
+
+<div class="warning">
+    <strong>⚠ Migration from v3:</strong> Old comma-delimited format <code>"reason^2,analyze^1"</code> is <strong>no longer valid</strong>.
+    Use pipe-delimited: <code>"reason^2 | analyze^1"</code>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="lobes">5. Lobes: Subject-Specific Partitions</h2>
+
+<p>Lobes partition the node map into specialized cognitive regions. Each lobe has a subject description,
+a node capacity (default 20,000), fire/inhibit counters, and bidirectional connections to other lobes.</p>
+
+<h3>Lobe Structure</h3>
+<pre><code>mutable struct LobeRecord
+    id::String               # Unique lobe ID
+    subject::String          # Domain description
+    node_ids::Set{String}    # Nodes assigned to this lobe
+    connections::Set{String}  # Connected lobe IDs (bidirectional)
+    node_cap::Int            # Max nodes (default 20,000)
+    fire_count::Int          # Times this lobe activated
+    inhibit_count::Int       # Times this lobe was suppressed
+end</code></pre>
+
+<h3>Cross-Lobe Cascade</h3>
+<p>When nodes fire in a primary lobe, <code>scan_and_expand()</code> performs two expansion passes:</p>
+
+<table>
+    <tr><th>Pass</th><th>Source</th><th>Confidence</th><th>Description</th></tr>
+    <tr><td>1. Drop-Table</td><td>Same lobe neighbors</td><td>80% of activator</td><td>Co-activation of linked nodes within the same domain</td></tr>
+    <tr><td>2. Lobe Cascade</td><td>Other active lobes</td><td>60% of max primary</td><td>Cross-domain bridge activation (threshold: 0.15 min confidence)</td></tr>
+</table>
+
+<div class="grug-box">
+    Lobe cascade is like Grug hearing a word in science cave, then peeking into philosophy cave to
+    see if anyone there has something to say too. Philosophy cave nodes get quieter voice (60% confidence)
+    but they still vote! This is why cross-domain queries work.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="lobe-tables">6. LobeTable: Per-Lobe Hash Storage</h2>
+
+<p>Each lobe has a chunked hash table (<code>LobeTableRecord</code>) with named chunks for different data types.
+Standard chunks include <code>json_data</code>, <code>drop_table</code>, <code>hopfield</code>, and <code>node_refs</code>.</p>
+
+<h3>Key Operations</h3>
+<table>
+    <tr><th>Function</th><th>Description</th></tr>
+    <tr><td><code>table_put!(lobe, chunk, key, val)</code></td><td>Store a key-value pair in a chunk</td></tr>
+    <tr><td><code>table_get(lobe, chunk, key)</code></td><td>Retrieve value (returns <code>nothing</code> if missing)</td></tr>
+    <tr><td><code>table_get!(lobe, chunk, key)</code></td><td>Retrieve value (throws if missing)</td></tr>
+    <tr><td><code>json_to_table_chunk!</code></td><td>Serialize node JSON data into table</td></tr>
+    <tr><td><code>drop_table_to_chunk!</code></td><td>Store node drop-table links</td></tr>
+    <tr><td><code>hopfield_put!/hopfield_get</code></td><td>Per-lobe associative memory cache</td></tr>
+    <tr><td><code>get_active_node_ids</code></td><td>List all non-deactivated nodes in lobe</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="brainstem">7. BrainStem: Winner-Take-All Dispatch</h2>
+
+<p>The BrainStem implements lateral inhibition across lobes. When multiple lobes produce competing responses,
+the BrainStem selects a winner based on confidence and propagates inhibitory signals to losers.</p>
+
+<h3>Dispatch Flow</h3>
+<ol>
+    <li>Each lobe's top-scoring node submits a bid (confidence score)</li>
+    <li>BrainStem selects highest confidence bid as winner</li>
+    <li>Winner's lobe gets a propagation signal (reinforcement)</li>
+    <li>Losing lobes get inhibitory feedback</li>
+</ol>
+
+<div class="academic-box">
+    This models the thalamo-cortical loop in biological brains where the thalamus (BrainStem)
+    gates which cortical region (lobe) gets to dominate the current processing cycle.
+    The inhibitory propagation prevents runaway excitation and ensures focused responses.
+</div>
+
+<!-- ================================================================ -->
+<h2 id="prefrontal">8. Prefrontal Cortex: AIML Orchestration <span class="new-badge">v6</span></h2>
+
+<p>The AIML orchestrator is GrugBot's <strong>prefrontal cortex</strong> — a centralized executive that integrates
+votes from ALL lobes into a unified response. It is NOT per-lobe; it sees the entire cognitive state.</p>
+
+<h3>Orchestration Pipeline</h3>
+<ol>
+    <li><strong>Vote Collection:</strong> All specimens from all lobes cast votes</li>
+    <li><strong>Confidence Sort:</strong> Votes sorted by confidence descending (highest-confidence domain node wins primary)</li>
+    <li><strong>Bucketing:</strong> Sure votes (within 0.05 of max) vs. Unsure votes (50/50 coinflip)</li>
+    <li><strong>Lobe Context:</strong> <code>extract_lobe_aware_context(votes)</code> maps votes → lobes, builds cross-domain awareness</li>
+    <li><strong>Rule Evaluation:</strong> Stochastic AIML rules fire based on their probability, with template variables expanded</li>
+    <li><strong>Response Generation:</strong> JIT text synthesis combining all context layers</li>
+</ol>
+
+<h3>AIML Template Variables</h3>
+<table>
+    <tr><th>Variable</th><th>Expands To</th></tr>
+    <tr><td><code>{MISSION}</code></td><td>Original user input text</td></tr>
+    <tr><td><code>{PRIMARY_ACTION}</code></td><td>Winning vote's action (e.g., "reason")</td></tr>
+    <tr><td><code>{SURE_ACTIONS}</code></td><td>Comma-separated list of high-confidence actions</td></tr>
+    <tr><td><code>{UNSURE_ACTIONS}</code></td><td>Coinflip-surviving lower-confidence actions</td></tr>
+    <tr><td><code>{ALL_ACTIONS}</code></td><td>Every action from every vote</td></tr>
+    <tr><td><code>{CONFIDENCE}</code></td><td>Primary vote's confidence score</td></tr>
+    <tr><td><code>{NODE_ID}</code></td><td>Primary vote's node ID</td></tr>
+    <tr><td><code>{MEMORY}</code></td><td>Pinned + recent message history</td></tr>
+    <tr><td><code>{LOBE_CONTEXT}</code> <span class="new-badge">NEW</span></td><td>Active lobes with node counts and sample patterns</td></tr>
+</table>
+
+<h3>Lobe-Aware Context</h3>
+<p>The <code>extract_lobe_aware_context(votes)</code> function maps all votes to their owning lobes and builds
+a context string showing which brain regions are active:</p>
+
+<pre><code># Example output:
+Lobe Context: [philosophy (2/4 active: truth knowledge logic | ethical moral)]
+            | [science (1/3 active: hypothesis experiment observe)]
+            | [reasoning (1/2 active: deduce infer analyze)]</code></pre>
+
+<div class="grug-box">
+    Before v6, AIML could only see the vote stream. If you asked about "hypothesis truth",
+    the science lobe fired and philosophy was a quiet cascade vote at 60%. Now the prefrontal
+    cortex SEES both lobes explicitly via <code>{LOBE_CONTEXT}</code>, so AIML rules can
+    reason across domains: "I see science AND philosophy are active — integrate both!"
+</div>
+
+<h3>Stochastic Rules</h3>
+<pre><code># Rules fire based on their probability
+/addRule "Focus on {PRIMARY_ACTION} with {CONFIDENCE} certainty"
+/addRule "Consider alternative angles from {UNSURE_ACTIONS} [prob=0.5]"
+/addRule "Draw from {LOBE_CONTEXT} for cross-domain insight [prob=0.7]"</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="input-queue">9. InputQueue & NegativeThesaurus <span class="new-badge">v6</span></h2>
+
+<h3>InputQueue: FIFO Priority Buffer</h3>
+<p>The InputQueue buffers user input during chatter sessions or high-load periods. Items are
+processed in priority order (higher priority first), with FIFO ordering within the same priority level.</p>
+
+<table>
+    <tr><th>Function</th><th>Description</th></tr>
+    <tr><td><code>enqueue!(text; priority=0)</code></td><td>Add input to queue. Throws if full (max 512) or empty text.</td></tr>
+    <tr><td><code>dequeue!()</code></td><td>Pop next item. Returns <code>nothing</code> if empty.</td></tr>
+    <tr><td><code>peek_queue()</code></td><td>Non-destructive snapshot of all queued items.</td></tr>
+    <tr><td><code>queue_size()</code></td><td>Current queue depth.</td></tr>
+    <tr><td><code>flush_queue!()</code></td><td>Wipe queue, return count of dropped items.</td></tr>
+</table>
+
+<h3>NegativeThesaurus: Inhibition Filter</h3>
+<p>The NegativeThesaurus is a pre-scan suppression layer. Words registered here are filtered from
+input tokens <em>before</em> pattern scanning, preventing unwanted concepts from activating nodes.</p>
+
+<table>
+    <tr><th>Function</th><th>Description</th></tr>
+    <tr><td><code>add_inhibition!(word; reason="")</code></td><td>Register word as inhibited. O(1) Dict storage. Max 256 entries.</td></tr>
+    <tr><td><code>remove_inhibition!(word)</code></td><td>Deregister. Returns <code>true</code> if found.</td></tr>
+    <tr><td><code>is_inhibited(word)</code></td><td>O(1) lookup. Case-insensitive, whitespace-stripped.</td></tr>
+    <tr><td><code>list_inhibitions()</code></td><td>All entries sorted alphabetically.</td></tr>
+    <tr><td><code>apply_inhibition_filter(tokens)</code></td><td>Remove inhibited tokens from a list.</td></tr>
+    <tr><td><code>apply_inhibition_to_text(text)</code></td><td>Split → filter → rejoin. Returns <code>(filtered_text, removed_words)</code>.</td></tr>
+</table>
+
+<div class="warning">
+    <strong>⚠ Over-blocking protection:</strong> If ALL tokens in input are inhibited,
+    <code>apply_inhibition_to_text</code> throws an <code>InputQueueError</code> rather than
+    passing an empty string to the scanner. This prevents silent null-input bugs.
+</div>
+
+<h3>Error Handling</h3>
+<pre><code>struct InputQueueError <: Exception
+    message::String    # What went wrong
+    context::String    # Which function threw (e.g., "enqueue!", "add_inhibition!")
+end</code></pre>
+
+<!-- ================================================================ -->
+<h2 id="thesaurus">10. Thesaurus: Dimensional Similarity Engine</h2>
+
+<p>The Thesaurus provides multi-dimensional synonym bridging for pattern expansion. Each word is
+characterized across 8 semantic dimensions, and similarity is computed as weighted Euclidean distance.</p>
+
+<h3>Semantic Dimensions</h3>
+<table>
+    <tr><th>Dimension</th><th>Range</th><th>Description</th></tr>
+    <tr><td>Formality</td><td>0.0 – 1.0</td><td>Casual ↔ Formal</td></tr>
+    <tr><td>Intensity</td><td>0.0 – 1.0</td><td>Mild ↔ Extreme</td></tr>
+    <tr><td>Valence</td><td>0.0 – 1.0</td><td>Negative ↔ Positive</td></tr>
+    <tr><td>Abstractness</td><td>0.0 – 1.0</td><td>Concrete ↔ Abstract</td></tr>
+    <tr><td>Temporality</td><td>0.0 – 1.0</td><td>Past ↔ Future</td></tr>
+    <tr><td>Certainty</td><td>0.0 – 1.0</td><td>Uncertain ↔ Certain</td></tr>
+    <tr><td>Agency</td><td>0.0 – 1.0</td><td>Passive ↔ Active</td></tr>
+    <tr><td>Specificity</td><td>0.0 – 1.0</td><td>General ↔ Specific</td></tr>
+</table>
+
+<h3>Synonym Groups</h3>
+<p>The Thesaurus ships with 40+ seed synonym groups across domains:</p>
+<ul>
+    <li><strong>Core:</strong> happy/joyful/glad, sad/unhappy/sorrowful, think/ponder/reason, etc.</li>
+    <li><strong>Science (10):</strong> hypothesis, experiment, observe, analyze, energy, matter, evolve, cause, effect, measure</li>
+    <li><strong>Philosophy (10):</strong> truth, knowledge, belief, logic, exist, consciousness, ethical, abstract, argue, question</li>
+</ul>
+
+<h3>Gate Filter</h3>
+<p>Before pattern scanning, the Thesaurus gate expands input tokens with known synonyms.
+If "happy" is in the input, "joyful", "glad", "cheerful" are added to the scan set,
+increasing match probability against nodes that use different but semantically equivalent words.</p>
+
+<!-- ================================================================ -->
+<h2 id="phagy">11. Phagy Mode: Self-Maintenance</h2>
+
+<p>Phagy cycles run during idle periods (triggered by a 50/50 coinflip when the cave has been quiet for ~30s).
+One of six maintenance automata runs per cycle:</p>
+
+<table>
+    <tr><th>#</th><th>Automaton</th><th>Description</th></tr>
+    <tr><td>1</td><td>ORPHAN_PRUNER</td><td>Find nodes with 0 neighbors and no recent activity → grave them</td></tr>
+    <tr><td>2</td><td>STRENGTH_DECAYER</td><td>Globally decay node strengths slightly (use-it-or-lose-it)</td></tr>
+    <tr><td>3</td><td>GRAVE_RECYCLER</td><td>Remove very old grave nodes to free memory</td></tr>
+    <tr><td>4</td><td>CACHE_VALIDATOR</td><td>Audit Hopfield cache for stale entries</td></tr>
+    <tr><td>5</td><td>DROP_TABLE_COMPACT</td><td>Remove broken links in drop tables</td></tr>
+    <tr><td>6</td><td>RULE_PRUNER</td><td>Remove AIML rules that reference graved nodes</td></tr>
+</table>
+
+<div class="grug-box">
+    Only ONE automaton runs per cycle. This is how Grug keeps Big-O safe.
+    Six automata running at once would be like six cave bears in one cave. Bad!
+</div>
+
+<!-- ================================================================ -->
+<h2 id="eye-system">12. EyeSystem: Visual Processing</h2>
+
+<p>The EyeSystem handles image inputs through a biologically-inspired visual pipeline:</p>
+<ol>
+    <li><strong>Image Detection:</strong> <code>detect_image_binary()</code> identifies Base64 image data URIs</li>
+    <li><strong>SDF Conversion:</strong> Image pixels → SDFParams (x, y, brightness, color arrays)</li>
+    <li><strong>Edge Blur:</strong> Gaussian blur simulating peripheral vision degradation</li>
+    <li><strong>Attention Map:</strong> Arousal-gated spatial attention with centroid weighting</li>
+    <li><strong>Arousal Modulation:</strong> Global arousal level (0.0-1.0) gates visual sensitivity</li>
+    <li><strong>Jitter:</strong> Stochastic noise injection for robust matching</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="chatter">13. ChatterMode: Gossip Sessions</h2>
+
+<p>Chatter sessions simulate "dreaming" — 100-800 node clones are placed in a gossip pool
+where they exchange patterns and evolve. This creates emergent connections without user input.</p>
+
+<h3>Rules</h3>
+<ul>
+    <li>Session requires 100-800 nodes minimum</li>
+    <li>Anti-collision: nodes can't exchange with themselves</li>
+    <li>Pattern blending: tokens from exchanged patterns are merged</li>
+    <li>Action packet blending: vote slots are slightly mixed</li>
+    <li>User input during chatter is queued and drained after completion</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</h2>
+
+<p>The SemanticVerbs module provides a live, extensible registry of relational verbs organized by class.
+Verb classes include <code>causal</code>, <code>spatial</code>, <code>temporal</code>, and can be extended at runtime.</p>
+
+<h3>Key Functions</h3>
+<table>
+    <tr><th>Function</th><th>Description</th></tr>
+    <tr><td><code>add_relation_class!(name)</code></td><td>Create new verb class bucket</td></tr>
+    <tr><td><code>add_verb!(verb, class)</code></td><td>Register verb in a class</td></tr>
+    <tr><td><code>add_synonym!(canonical, alias)</code></td><td>Map alias → canonical for normalization</td></tr>
+    <tr><td><code>normalize_synonyms(text)</code></td><td>Replace all aliases with canonical forms</td></tr>
+    <tr><td><code>get_all_verbs()</code></td><td>List every registered verb</td></tr>
+    <tr><td><code>extract_relational_triples(text)</code></td><td>Parse text into (subject, relation, object) triples</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="action-tone">15. ActionTonePredictor: Input Classification</h2>
+
+<p>Classifies user input into action families and tone families before scanning:</p>
+
+<h3>Action Families</h3>
+<ul>
+    <li><code>ACTION_QUERY</code> — questions ("what", "why", "how")</li>
+    <li><code>ACTION_COMMAND</code> — directives ("run", "do", "execute")</li>
+    <li><code>ACTION_ASSERT</code> — statements of fact</li>
+</ul>
+
+<h3>Tone Families</h3>
+<ul>
+    <li><code>TONE_NEUTRAL</code> — default</li>
+    <li><code>TONE_CURIOUS</code> — exploratory questions</li>
+    <li><code>TONE_HOSTILE</code> — aggressive/negative input</li>
+    <li><code>TONE_URGENT</code> — time-critical, escalated</li>
+    <li><code>TONE_REFLECTIVE</code> — thoughtful, hedged</li>
+</ul>
+
+<h3>Arousal Nudge</h3>
+<p>The predictor calculates an arousal nudge that's applied to EyeSystem:</p>
+<ul>
+    <li>Hostile/Urgent → positive nudge (heightened arousal)</li>
+    <li>Reflective → negative nudge (calmed arousal)</li>
+    <li>Neutral/Curious → no nudge</li>
+</ul>
+
+<h3>Weight Multiplier</h3>
+<p>Nodes whose action aligns with the predicted action type get a confidence multiplier >1.0;
+misaligned nodes get <1.0. This biases voting toward contextually appropriate responses.</p>
+
+<!-- ================================================================ -->
+<h2 id="math">16. Formal Mathematics</h2>
+
+<h3>Strength Dynamics</h3>
+<div class="math-section">
+    <p><strong>Bump (on vote):</strong></p>
+    <code>s(t+1) = min(s(t) + δ, STRENGTH_CAP)</code> where <code>δ ~ Bernoulli(0.5)</code>
+    <p><strong>Penalize (/wrong):</strong></p>
+    <code>s(t+1) = max(s(t) - δ, 0.0)</code> where <code>δ ~ Bernoulli(0.5)</code>
+    <p><strong>Grave condition:</strong> <code>s(t) = 0.0 → is_grave = true</code></p>
+</div>
+
+<h3>Scan Confidence</h3>
+<div class="math-section">
+    <p><strong>Token overlap:</strong></p>
+    <code>conf_token = |input_tokens ∩ node_tokens| / max(|input_tokens|, |node_tokens|)</code>
+    <p><strong>Relational triple boost:</strong></p>
+    <code>conf_rel = Σ(matching_triples) × TRIPLE_WEIGHT</code>
+    <p><strong>Combined:</strong></p>
+    <code>conf = conf_token × TOKEN_WEIGHT + conf_rel × REL_WEIGHT</code>
+</div>
+
+<h3>Cascade Confidence</h3>
+<div class="math-section">
+    <p><strong>Drop-table (same lobe):</strong></p>
+    <code>conf_drop = conf_activator × 0.8</code>
+    <p><strong>Lobe cascade (cross-lobe):</strong></p>
+    <code>conf_cascade = max(conf_primary) × 0.6</code> (only fires if <code>conf_cascade ≥ 0.15</code>)
+</div>
+
+<h3>Action Selection</h3>
+<div class="math-section">
+    <p><strong>Weighted random:</strong></p>
+    <code>P(action_i) = weight_i / Σ(all_weights)</code>
+    <p>Implemented via <code>Categorical</code> distribution from Distributions.jl, wrapped in <code>@coinflip</code> macro.</p>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="cli">17. CLI Command Reference</h2>
+
+<h3>Core Commands</h3>
+<table>
+    <tr><th>Command</th><th>Description</th><th>Example</th></tr>
+    <tr><td><code>/mission <text></code></td><td>Main input. Scan, vote, orchestrate, respond.</td><td><code>/mission what is truth?</code></td></tr>
+    <tr><td><code>/wrong</code></td><td>Penalize last response voters via coinflip.</td><td><code>/wrong</code></td></tr>
+    <tr><td><code>/explicit <cmd> [<id>] <text></code></td><td>Force a command on a specific node.</td><td><code>/explicit reason [node_0] why?</code></td></tr>
+    <tr><td><code>/grow <json></code></td><td>Plant new nodes from JSON packet.</td><td><code>/grow {"nodes":[...]}</code></td></tr>
+    <tr><td><code>/addRule <rule> [prob=X]</code></td><td>Add stochastic AIML orchestration rule.</td><td><code>/addRule Be concise [prob=0.8]</code></td></tr>
+    <tr><td><code>/pin <text></code></td><td>Pin text to persistent memory wall.</td><td><code>/pin always be polite</code></td></tr>
+    <tr><td><code>/help</code></td><td>Full command reference scroll.</td><td><code>/help</code></td></tr>
+</table>
+
+<h3>Status Commands</h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/nodes</code></td><td>Node map status: strength, neighbors, grave state</td></tr>
+    <tr><td><code>/status</code></td><td>System health: chatter, node count, arousal, memory, timing</td></tr>
+    <tr><td><code>/arousal <0.0-1.0></code></td><td>Manually set EyeSystem arousal level</td></tr>
+</table>
+
+<h3>Semantic Verbs Commands</h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/addVerb <verb> <class></code></td><td>Add verb to existing relation class</td></tr>
+    <tr><td><code>/addRelationClass <name></code></td><td>Create new verb class bucket</td></tr>
+    <tr><td><code>/addSynonym <canonical> <alias></code></td><td>Register synonym normalization</td></tr>
+    <tr><td><code>/listVerbs</code></td><td>Dump all verb classes + synonyms</td></tr>
+</table>
+
+<h3>Lobe Commands</h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/newLobe <id> <subject></code></td><td>Create subject lobe (max 64 lobes, 20k nodes each)</td></tr>
+    <tr><td><code>/connectLobes <a> <b></code></td><td>Bidirectional lobe connection</td></tr>
+    <tr><td><code>/lobeGrow <id> <json></code></td><td>Grow node directly into a named lobe</td></tr>
+    <tr><td><code>/lobes</code></td><td>List all lobes with status</td></tr>
+    <tr><td><code>/tableStatus <lobe_id></code></td><td>Show hash table chunk sizes</td></tr>
+    <tr><td><code>/tableMatch <lobe> <chunk> <pattern></code></td><td>Pattern-activate table entries</td></tr>
+</table>
+
+<h3>Thesaurus Commands</h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/thesaurus <w1> | <w2></code></td><td>Dimensional similarity comparison</td></tr>
+    <tr><td><code>/thesaurus <w1> | <w2> :: <ctx1> :: <ctx2></code></td><td>With context word lists</td></tr>
+</table>
+
+<h3>NegativeThesaurus Commands <span class="new-badge">v6</span></h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/negativeThesaurus add <word> [--reason <text>]</code></td><td>Register inhibition word</td></tr>
+    <tr><td><code>/negativeThesaurus remove <word></code></td><td>Deregister inhibition</td></tr>
+    <tr><td><code>/negativeThesaurus list</code></td><td>Show all inhibitions</td></tr>
+    <tr><td><code>/negativeThesaurus check <word></code></td><td>Test if word is inhibited</td></tr>
+    <tr><td><code>/negativeThesaurus flush</code></td><td>Clear all inhibitions</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="files">18. File Reference</h2>
+
+<h3>Core Modules (15 files, ~8,789 lines)</h3>
+<table>
+    <tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+    <tr><td><code>stochastichelper.jl</code></td><td>168</td><td>@coinflip macro, Categorical distribution DSL</td></tr>
+    <tr><td><code>patternscanner.jl</code></td><td>249</td><td>Token overlap matching, pattern compilation</td></tr>
+    <tr><td><code>ImageSDF.jl</code></td><td>460</td><td>Image binary detection, SDF conversion, jitter</td></tr>
+    <tr><td><code>EyeSystem.jl</code></td><td>443</td><td>Edge blur, attention map, arousal modulation</td></tr>
+    <tr><td><code>ChatterMode.jl</code></td><td>575</td><td>Gossip sessions, pattern blending, input queue</td></tr>
+    <tr><td><code>SemanticVerbs.jl</code></td><td>391</td><td>Runtime verb registry, synonym normalization, triple extraction</td></tr>
+    <tr><td><code>ActionTonePredictor.jl</code></td><td>562</td><td>Input classification, arousal nudge, weight multiplier</td></tr>
+    <tr><td><code>engine.jl</code></td><td>1486</td><td>Core engine: nodes, scanning, voting, Hopfield cache, action packets</td></tr>
+    <tr><td><code>Lobe.jl</code></td><td>381</td><td>Lobe registry, connections, node assignment</td></tr>
+    <tr><td><code>LobeTable.jl</code></td><td>627</td><td>Per-lobe chunked hash storage</td></tr>
+    <tr><td><code>BrainStem.jl</code></td><td>333</td><td>Winner-take-all dispatch, lateral inhibition</td></tr>
+    <tr><td><code>InputQueue.jl</code></td><td>256</td><td>FIFO priority queue + NegativeThesaurus inhibition filter</td></tr>
+    <tr><td><code>Thesaurus.jl</code></td><td>630</td><td>Dimensional similarity, synonym bridging, gate filter</td></tr>
+    <tr><td><code>PhagyMode.jl</code></td><td>611</td><td>6 maintenance automata, self-pruning cycles</td></tr>
+    <tr><td><code>Main.jl</code></td><td>1485</td><td>CLI loop, command routing, AIML orchestrator, prefrontal cortex</td></tr>
+</table>
+
+<h3>Test Files (10 files)</h3>
+<table>
+    <tr><th>File</th><th>Groups</th><th>Assertions</th><th>Coverage</th></tr>
+    <tr><td><code>test_smoke.jl</code></td><td>16</td><td>~80</td><td>All modules integration: ImageSDF, EyeSystem, Engine, ChatterMode, SemanticVerbs, ActionTone</td></tr>
+    <tr><td><code>test_lobes.jl</code></td><td>—</td><td>123</td><td>Lobe CRUD, connections, capacity, node assignment</td></tr>
+    <tr><td><code>test_lobe_table.jl</code></td><td>—</td><td>193</td><td>LobeTable chunks, Hopfield, JSON serialization</td></tr>
+    <tr><td><code>test_brainstem.jl</code></td><td>—</td><td>39</td><td>BrainStem dispatch, propagation, error resilience</td></tr>
+    <tr><td><code>test_thesaurus.jl</code></td><td>—</td><td>151</td><td>Dimensional similarity, gate filter, synonym groups</td></tr>
+    <tr><td><code>test_chat_specimen.jl</code></td><td>18</td><td>—</td><td>Chat specimen format, command registration, pipe-delimited packets</td></tr>
+    <tr><td><code>test_input_queue.jl</code></td><td>20</td><td>1095</td><td>InputQueue FIFO/priority/overflow + NegativeThesaurus CRUD/filter/stress</td></tr>
+    <tr><td><code>test_action_packet.jl</code></td><td>18</td><td>111</td><td>Parser v2: pipe format, negatives, commas, weights, dedup, integration</td></tr>
+    <tr><td><code>test_phagy.jl</code></td><td>—</td><td>—</td><td>Phagy automaton cycle</td></tr>
+    <tr><td><code>live_training_test.jl</code></td><td>22</td><td>—</td><td>Multi-lobe training: 7 lobes, 21 nodes, cascade, cross-domain</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2 id="testing">19. Test Suite</h2>
+
+<h3>Running Tests</h3>
+<pre><code># Run all tests
+julia test_smoke.jl          # 16 integration groups
+julia test_lobes.jl          # 123 assertions
+julia test_lobe_table.jl     # 193 assertions
+julia test_brainstem.jl      # 39 assertions
+julia test_thesaurus.jl      # 151 assertions
+julia test_chat_specimen.jl  # 18 specimens
+julia test_input_queue.jl    # 20 groups, 1095 assertions
+julia test_action_packet.jl  # 18 groups, 111 assertions
+julia test_phagy.jl          # Phagy cycle
+julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code></pre>
+
+<h3>Test Results Summary (v7)</h3>
+<table>
+    <tr><th>Test File</th><th>Result</th><th>Details</th></tr>
+    <tr><td>test_smoke.jl</td><td style="color:#00ff88;">✅ 16/16</td><td>All module integration groups pass</td></tr>
+    <tr><td>test_lobes.jl</td><td style="color:#00ff88;">✅ 123/123</td><td>Full Lobe.jl coverage</td></tr>
+    <tr><td>test_lobe_table.jl</td><td style="color:#00ff88;">✅ 193/193</td><td>Full LobeTable.jl coverage</td></tr>
+    <tr><td>test_brainstem.jl</td><td style="color:#00ff88;">✅ 39/39</td><td>Dispatch + error resilience</td></tr>
+    <tr><td>test_thesaurus.jl</td><td style="color:#00ff88;">✅ 151/151</td><td>Similarity + gate filter</td></tr>
+    <tr><td>test_chat_specimen.jl</td><td style="color:#00ff88;">✅ 0 errors</td><td>18 specimens validated</td></tr>
+    <tr><td>test_input_queue.jl</td><td style="color:#00ff88;">✅ 1095</td><td>20 groups including stress test</td></tr>
+    <tr><td>test_action_packet.jl</td><td style="color:#00ff88;">✅ 111</td><td>18 groups, pipe format validated</td></tr>
+    <tr><td>test_phagy.jl</td><td style="color:#00ff88;">✅ OK</td><td>Phagy cycle clean</td></tr>
+    <tr><td>live_training_test.jl</td><td style="color:#00ff88;">✅ 0 hard fail</td><td>12+ pass, soft misses expected</td></tr>
+</table>
+
+<div class="tip">
+    <strong>💡 Soft misses</strong> in live_training_test are expected — they mean the scanner needs more
+    nodes or lower thresholds for full domain coverage. The key metric is <strong>zero hard failures</strong>
+    (crashes or wrong action selection).
+</div>
+
+<!-- ================================================================ -->
+<div style="margin-top: 60px; border-top: 2px solid #333; padding-top: 30px;">
+    <h2 style="color: #00ff88; border: none; padding: 0;">Changelog</h2>
+    <h4>v7 (Current)</h4>
+    <ul>
+        <li>Action packets v2: pipe-delimited format with inline negatives per action</li>
+        <li>Lobe-aware prefrontal cortex: <code>{LOBE_CONTEXT}</code> AIML placeholder</li>
+        <li>InputQueue module: FIFO priority buffer + NegativeThesaurus inhibition filter</li>
+        <li>Vote sorting by confidence descending before bucketing</li>
+        <li>3 new command families: explain(5), empathy(5), warning(5) = 15 new commands</li>
+        <li>20 new science/philosophy synonym groups in Thesaurus</li>
+        <li>Eliminated all silent catch blocks (replaced with @warn logging)</li>
+        <li>New test suites: test_input_queue.jl (1095 assertions), test_action_packet.jl (111 assertions)</li>
+        <li>Updated /help command, boot message, and architectural spec</li>
+    </ul>
+    <h4>v3 (Base)</h4>
+    <ul>
+        <li>Lobe system (Lobe.jl, LobeTable.jl, BrainStem.jl)</li>
+        <li>Thesaurus dimensional similarity engine</li>
+        <li>Full test suite: smoke, lobes, lobe_table, brainstem, thesaurus, chat_specimen</li>
+        <li>Image SDF processing pipeline</li>
+        <li>EyeSystem arousal + attention</li>
+        <li>ChatterMode gossip sessions</li>
+        <li>PhagyMode self-maintenance</li>
+        <li>SemanticVerbs runtime registry</li>
+        <li>ActionTonePredictor input classification</li>
+    </ul>
+</div>
+
+<div class="signature">
+    <p>GrugBot Neuromorphic Engine v7 &mdash; Technical Whitepaper</p>
+    <p>🦴 "Cave brain think different. That is why cave brain strong." &mdash; Grug</p>
+</div>
+
+</body>
+</html>
