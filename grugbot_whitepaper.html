@@ -627,7 +627,7 @@ increasing match probability against nodes that use different but semantically e
 <!-- ================================================================ -->
 <h2 id="phagy">11. Phagy Mode: Self-Maintenance</h2>
 
-<p>Phagy cycles run during idle periods (triggered by a 50/50 coinflip when the cave has been quiet for ~120s ±30s).
+<p>Phagy cycles run during idle periods (triggered by a 50/50 coinflip when the cave has been quiet for ~120s ±30s, requires 1000+ alive non-image nodes).
 One of six maintenance automata runs per cycle:</p>
 
 <table>
@@ -1153,7 +1153,7 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
     <h4>v7.1 (Current)</h4>
     <ul>
         <li>ChatterMode v7.1: idle timer slowed from 30s to 120s &plusmn;30s (shared timer for both chatter and phagy)</li>
-        <li>Population gate: chatter only fires at 1000+ alive non-image nodes. New specimens skip chatter entirely.</li>
+        <li>Population gate: both chatter AND phagy only fire at 1000+ alive non-image nodes. New specimens skip all idle actions entirely.</li>
         <li>Group size reduced from 100&ndash;800 to 50&ndash;500. Floor at available population if < 50 eligible.</li>
         <li>Weak-only morph: only receivers strictly weaker than sender can accept pattern blend. Strong nodes signal but never change.</li>
         <li>Once-per-day morph limit: 24h cooldown per node via <code>MORPH_COOLDOWN_MAP</code>. Prevents runaway identity drift.</li>

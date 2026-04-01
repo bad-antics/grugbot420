@@ -1694,11 +1694,12 @@ GRUG: Check if cave is idle enough for an idle action (v7.1 — SLOW TIMER).
 Uses ChatterMode.should_trigger_idle() which checks the SHARED 120s ±30s timer.
 Both chatter and phagy use this SAME timer. One idle event, one action.
 
+POPULATION GATE: Both chatter AND phagy require >= 1000 alive non-image nodes.
+New specimens with < 1000 nodes skip ALL idle actions. They need to grow first.
+
 If yes, do a 50/50 COINFLIP:
   - Heads (CHATTER): snapshot NODE_MAP, run gossip session, apply diffs back.
-    ONLY fires if node population >= 1000 (population gate).
   - Tails (PHAGY):   run one phagy automaton for map maintenance.
-    Always fires regardless of population (maintenance is always needed).
 """
 function maybe_run_idle()
     # GRUG: Don't start if chatter is already running (single-threaded loop guard)
@@ -1707,6 +1708,18 @@ function maybe_run_idle()
 
     # GRUG: Check idle threshold (v7.1: 120s ±30s, shared timer for both chatter + phagy)
     !ChatterMode.should_trigger_idle(LAST_INPUT_TIME[]) && return
+
+    # GRUG: Count alive non-image nodes for population gate (v7.1).
+    # Both chatter AND phagy require >= 1000 nodes. New specimens skip all idle actions.
+    alive_count = lock(NODE_LOCK) do
+        count(n -> !n.is_grave && !n.is_image_node, values(NODE_MAP))
+    end
+
+    if alive_count < ChatterMode.MIN_POPULATION_FOR_CHATTER
+        # GRUG: Population too small. No idle actions for young specimens.
+        LAST_INPUT_TIME[] = time()
+        return
+    end
 
     # GRUG: THE COINFLIP. 50/50 - Chatter or Phagy. No favorites.
     if rand() < 0.5
@@ -1728,15 +1741,6 @@ function maybe_run_idle()
             return
         end
 
-        # GRUG: Population gate (v7.1) — chatter only for mature specimens (1000+ nodes).
-        # If < 1000 nodes, skip chatter silently and reset timer. New specimens don't chatter.
-        if length(snapshot) < ChatterMode.MIN_POPULATION_FOR_CHATTER
-            println("[IDLE:CHATTER] ⏭  Population $(length(snapshot)) < $(ChatterMode.MIN_POPULATION_FOR_CHATTER). " *
-                    "New specimens don't chatter. Skipping.")
-            LAST_INPUT_TIME[] = time()
-            return
-        end
-
         println("[IDLE] 🪙  Coinflip → CHATTER. Starting gossip round ($(length(snapshot)) eligible nodes)...")
 
         try
@@ -1754,7 +1758,7 @@ function maybe_run_idle()
 
     else
         # ── TAILS: PHAGY ──────────────────────────────────────────────────────
-        # GRUG: Phagy always fires regardless of population. Maintenance is always needed.
+        # GRUG: Phagy fires for mature specimens (1000+ nodes, gated above).
         println("[IDLE] 🪙  Coinflip → PHAGY. Running maintenance automaton...")
 
         # GRUG: Grab the live rules vector for RULE PRUNER
@@ -2330,13 +2334,13 @@ run_cli()
 # 5. IDLE MODE: CHATTER + PHAGY COINFLIP (v7.1 — SLOW TIMER):
 # Idle detection runs between CLI prompts via maybe_run_idle(). When the cave has
 # been quiet for ~120s (±30s jitter), a 50/50 coinflip fires. BOTH chatter and
-# phagy share this same slow timer. HEADS triggers a chatter session (if population
-# >= 1000 nodes; new specimens skip chatter entirely): 50-500 node clones gossip
+# phagy share this same slow timer. Both require >= 1000 alive non-image nodes;
+# new specimens skip ALL idle actions. HEADS triggers a chatter session: 50-500 node clones gossip
 # and exchange patterns. Only WEAK nodes morph — receivers must be weaker than
 # senders. Each node can only morph once per 24 hours (MORPH_COOLDOWN_MAP).
 # TAILS triggers a phagy cycle: one of six maintenance automata runs
 # (ORPHAN_PRUNER, STRENGTH_DECAYER, GRAVE_RECYCLER, CACHE_VALIDATOR,
-# DROP_TABLE_COMPACT, RULE_PRUNER). Phagy always fires regardless of population.
+# DROP_TABLE_COMPACT, RULE_PRUNER). Phagy also requires 1000+ nodes (gated above coinflip).
 # Only ONE automaton runs per phagy cycle to preserve Big-O safety. User input
 # arriving during chatter is queued and drained after session completion. Phagy is
 # synchronous and completes before the next prompt, so no queuing is needed.

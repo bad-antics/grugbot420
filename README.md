@@ -218,9 +218,9 @@ Rules with no `[prob=X]` suffix default to `prob=1.0` (always fire).
 When the cave has been quiet for ~120 seconds (±30s jitter), GrugBot runs an idle action automatically — a 50/50 coinflip between:
 
 - **Chatter (1000+ nodes only):** 50–500 node clones gossip and exchange patterns. Only **weak** nodes morph — receivers must be weaker than senders. Each node can only morph **once per 24 hours** (cooldown enforced). New specimens with < 1000 nodes skip chatter entirely.
-- **Phagy:** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, or rule pruning). Always fires regardless of population.
+- **Phagy (1000+ nodes only):** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, or rule pruning).
 
-Both chatter and phagy share the same slow idle timer. If fewer than 50 eligible nodes exist, the group size floors at whatever is available. You don't need to trigger this manually. It runs between CLI prompts.
+Both chatter and phagy share the same slow idle timer and the same 1000+ node population gate. New specimens with < 1000 nodes skip all idle actions entirely. If fewer than 50 eligible nodes exist in a chatter round, the group size floors at whatever is available. You don't need to trigger this manually. It runs between CLI prompts.
 
 ---
 
