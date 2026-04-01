@@ -213,14 +213,14 @@ Rules with no `[prob=X]` suffix default to `prob=1.0` (always fire).
 
 ---
 
-## Idle Behavior
+## Idle Behavior (v7.1 — Slow Timer)
 
-When the cave has been quiet for ~30 seconds, GrugBot runs an idle action automatically — a 50/50 coinflip between:
+When the cave has been quiet for ~120 seconds (±30s jitter), GrugBot runs an idle action automatically — a 50/50 coinflip between:
 
-- **Chatter:** 100–800 node clones gossip and exchange patterns, strengthening frequently co-activated knowledge
-- **Phagy:** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, or rule pruning)
+- **Chatter (1000+ nodes only):** 50–500 node clones gossip and exchange patterns. Only **weak** nodes morph — receivers must be weaker than senders. Each node can only morph **once per 24 hours** (cooldown enforced). New specimens with < 1000 nodes skip chatter entirely.
+- **Phagy:** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, or rule pruning). Always fires regardless of population.
 
-You don't need to trigger this manually. It runs between CLI prompts.
+Both chatter and phagy share the same slow idle timer. If fewer than 50 eligible nodes exist, the group size floors at whatever is available. You don't need to trigger this manually. It runs between CLI prompts.
 
 ---
 
@@ -257,7 +257,7 @@ julia live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
 | `BrainStem.jl` | Winner-take-all dispatcher with cross-lobe signal propagation and fire-count decay. |
 | `Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary, gate filter, and runtime seed injection. |
 | `InputQueue.jl` | FIFO input queue and NegativeThesaurus inhibition filter. |
-| `ChatterMode.jl` | Idle gossip system: ephemeral node clones exchange patterns between prompts. |
+| `ChatterMode.jl` | Idle gossip system (v7.1): 50–500 ephemeral clones, 1000+ node gate, weak-only morph, 24h cooldown, 120s±30s shared timer. |
 | `PhagyMode.jl` | Six idle-time maintenance automata for self-healing map management. |
 | `EyeSystem.jl` | Visual attention: edge blurring, arousal-gated center cutout, attention modulation. |
 | `ImageSDF.jl` | JIT image → SDF parameter conversion for image node matching. |

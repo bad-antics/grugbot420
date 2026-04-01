@@ -1,21 +1,28 @@
 # ChatterMode.jl
 # ==============================================================================
-# IDLE / CHATTER MODE - LOW-FLOW NODE GOSSIP SYSTEM
+# IDLE / CHATTER MODE - LOW-FLOW NODE GOSSIP SYSTEM (v7.1)
 # ==============================================================================
 # GRUG: When cave is quiet (no user input = low flow / idle mode), nodes do NOT vote.
-# Instead, at DISCRETE RANDOM INTERVALS, a random group of 100-800 pattern-related
-# nodes are selected to CHATTER.
+# Instead, at DISCRETE RANDOM INTERVALS (120s ±30s), a random group of 50-500
+# pattern-related nodes are selected to CHATTER.
 #
-# CHATTER MECHANICS:
+# POPULATION GATE: Chatter ONLY fires if total alive non-image node count >= 1000.
+# New specimens with < 1000 nodes do NOT chatter. Period.
+# Minimum eligible group size is floored at available population (if < 50 eligible,
+# use whatever is available as ceiling).
+#
+# CHATTER MECHANICS (v7.1):
 #   - Selected nodes exchange their pattern + vote_slot params as JSON to neighbors
 #   - Exchange happens on a COINFLIP (not guaranteed)
-#   - Receiving nodes do a BIASED coinflip: strong nodes MORE likely to be copied
+#   - ONLY WEAK NODES MORPH: receiver must be WEAKER than sender to accept blend
+#   - Strong nodes signal but do NOT change. Weak nodes drift toward strong neighbors.
+#   - ONCE-PER-DAY MORPH LIMIT: each node can only morph once every 24 hours.
+#     Tracked via MORPH_COOLDOWN_MAP (node_id -> last_morph_timestamp).
 #   - Copied content makes receiving node's pattern/vote_slot MORE SIMILAR to sender
 #   - Chatter spawns EPHEMERAL REGULAR-SPEED CLONES (not part of flowing map)
 #   - Nodes get JITTER on their strength values during chatter (levels playing field)
 #   - ANTI-COLLISION: nodes track who they've talked to this round (no double-chatter)
 #   - If USER INPUT arrives during chatter: queue it, wait for chatter to finish
-#   - New nodes LATCH onto strong similar neighbors (max 4 neighbors = UNLINKABLE)
 # ==============================================================================
 
 module ChatterMode
@@ -25,6 +32,34 @@ using JSON
 
 export ChatterSession, start_chatter_session!, process_chatter_queue!
 export ChatterNodeClone, ChatterLog, get_chatter_status
+export should_trigger_idle, is_morph_allowed, record_morph!
+export MORPH_COOLDOWN_MAP, MORPH_COOLDOWN_LOCK
+export MIN_POPULATION_FOR_CHATTER, IDLE_THRESHOLD_SECONDS
+
+# ==============================================================================
+# CONSTANTS (v7.1)
+# ==============================================================================
+
+# GRUG: Minimum node population before chatter is allowed.
+# New specimens with < 1000 nodes do NOT chatter. They need to grow first.
+const MIN_POPULATION_FOR_CHATTER = 1000
+
+# GRUG: Default idle threshold in seconds before an idle event (chatter OR phagy) fires.
+# Both chatter and phagy use this SAME timer. Much slower than v7 (was 30s, now 120s).
+# Jitter band: ±30s (was ±5s). This means idle events fire between 90s and 150s apart.
+const IDLE_THRESHOLD_SECONDS = 120.0
+
+# GRUG: Jitter band for idle threshold. Random offset in [-JITTER, +JITTER].
+const IDLE_JITTER_SECONDS = 30.0
+
+# GRUG: Chatter group size bounds. 50-500 nodes per gossip round (was 100-800).
+# If fewer than 50 eligible nodes exist, floor at whatever is available.
+const CHATTER_GROUP_MIN = 50
+const CHATTER_GROUP_MAX = 500
+
+# GRUG: Morph cooldown period in seconds. 24 hours = 86400 seconds.
+# A node that morphed cannot morph again until this cooldown expires.
+const MORPH_COOLDOWN_SECONDS = 86400.0
 
 # ==============================================================================
 # ERROR TYPES - GRUG: NO SILENT FAILURES!
@@ -38,6 +73,53 @@ Base.showerror(io::IO, e::ChatterError) =
     print(io, "ChatterError: ", e.msg)
 
 # ==============================================================================
+# MORPH COOLDOWN TRACKING (ONCE-PER-DAY LIMIT)
+# ==============================================================================
+
+# GRUG: Global map of node_id -> last morph timestamp (Float64, epoch seconds).
+# Nodes can only morph once per 24 hours. This prevents runaway drift where
+# weak nodes get blended every single chatter round and lose all identity.
+const MORPH_COOLDOWN_MAP = Dict{String, Float64}()
+const MORPH_COOLDOWN_LOCK = ReentrantLock()
+
+"""
+is_morph_allowed(node_id::String)::Bool
+
+GRUG: Check if a node is allowed to morph right now.
+Returns true if the node has never morphed OR if >= 24 hours since last morph.
+Returns false if the node morphed within the last 24 hours.
+"""
+function is_morph_allowed(node_id::String)::Bool
+    if strip(node_id) == ""
+        throw(ChatterError("!!! FATAL: is_morph_allowed got empty node_id! !!!"))
+    end
+    lock(MORPH_COOLDOWN_LOCK) do
+        if !haskey(MORPH_COOLDOWN_MAP, node_id)
+            # GRUG: Node has never morphed. Allow it.
+            return true
+        end
+        last_morph = MORPH_COOLDOWN_MAP[node_id]
+        elapsed = time() - last_morph
+        return elapsed >= MORPH_COOLDOWN_SECONDS
+    end
+end
+
+"""
+record_morph!(node_id::String)
+
+GRUG: Record that a node just morphed. Stamps current time into cooldown map.
+Next morph attempt by this node will be blocked until 24 hours pass.
+"""
+function record_morph!(node_id::String)
+    if strip(node_id) == ""
+        throw(ChatterError("!!! FATAL: record_morph! got empty node_id! !!!"))
+    end
+    lock(MORPH_COOLDOWN_LOCK) do
+        MORPH_COOLDOWN_MAP[node_id] = time()
+    end
+end
+
+# ==============================================================================
 # CHATTER NODE CLONE (EPHEMERAL)
 # ==============================================================================
 
@@ -49,7 +131,9 @@ mutable struct ChatterNodeClone
     pattern::String             # GRUG: Snapshot of pattern at chatter time
     vote_slot::String           # GRUG: Snapshot of action_packet at chatter time
     strength::Float64           # GRUG: Snapshot of strength (jittered for chatter!)
+    original_strength::Float64  # GRUG: UN-jittered strength for weak/strong comparison
     talked_to::Set{String}      # GRUG: Anti-collision: who this clone has chatted with
+    morphed_this_session::Bool  # GRUG: Track if this clone morphed (for diff application)
 end
 
 # ==============================================================================
@@ -61,12 +145,14 @@ mutable struct ChatterSession
     session_id::String
     start_time::Float64
     end_time::Float64             # GRUG: 0.0 means session still running
-    group_size::Int               # GRUG: How many nodes were selected (100-800)
+    group_size::Int               # GRUG: How many nodes were selected (50-500)
     clones::Vector{ChatterNodeClone}
     is_running::Bool
     queued_inputs::Vector{String} # GRUG: User inputs that arrived during chatter
     exchanges_completed::Int      # GRUG: How many gossip exchanges happened
-    copies_accepted::Int          # GRUG: How many times a node accepted a copy
+    copies_accepted::Int          # GRUG: How many times a weak node accepted a morph
+    morphs_blocked_cooldown::Int  # GRUG: How many morphs blocked by 24h cooldown
+    morphs_blocked_strength::Int  # GRUG: How many morphs blocked by strength gate
 end
 
 # GRUG: Chatter log for diagnostics. Keeps last N sessions.
@@ -92,6 +178,8 @@ struct ChatterLog
     group_size::Int
     exchanges::Int
     copies::Int
+    morphs_blocked_cooldown::Int
+    morphs_blocked_strength::Int
     queued_inputs::Int
 end
 
@@ -110,10 +198,14 @@ function get_chatter_status()
     log_count = lock(CHATTER_LOG_LOCK) do
         length(CHATTER_LOG)
     end
+    cooldown_count = lock(MORPH_COOLDOWN_LOCK) do
+        length(MORPH_COOLDOWN_MAP)
+    end
     return (
-        is_running   = is_running,
-        queue_depth  = queue_depth,
-        sessions_run = log_count
+        is_running      = is_running,
+        queue_depth     = queue_depth,
+        sessions_run    = log_count,
+        nodes_on_cooldown = cooldown_count
     )
 end
 
@@ -282,7 +374,7 @@ function sample(v::AbstractVector, n::Int; replace::Bool=false)
 end
 
 # ==============================================================================
-# CHATTER SESSION RUNNER
+# CHATTER SESSION RUNNER (v7.1)
 # ==============================================================================
 
 """
@@ -293,13 +385,26 @@ GRUG: Run one full chatter session.
 node_map_snapshot is a Vector of (node_id, pattern, action_packet, strength) tuples.
 This is a SNAPSHOT - chatter works on copies, not live nodes (ephemeral clones).
 
+POPULATION GATE (v7.1): If snapshot has < MIN_POPULATION_FOR_CHATTER (1000) nodes,
+chatter is REFUSED. New specimens don't chatter. Throw ChatterError.
+
+GROUP SIZE (v7.1): 50-500 nodes per round. If fewer than 50 eligible, use whatever
+is available as the ceiling (floor at population).
+
+WEAK-ONLY MORPH (v7.1): Only receivers WEAKER than the sender can accept a pattern
+blend. Strong nodes signal but never change. Weak nodes drift toward strong neighbors.
+
+ONCE-PER-DAY MORPH (v7.1): Each node can only morph once every 24 hours.
+Tracked via MORPH_COOLDOWN_MAP. If a node morphed within 24h, it is skipped.
+
 STEPS:
-  1. Select random group of 100-800 nodes
-  2. Create ephemeral clones with jittered strength
-  3. For each clone, on a coinflip, attempt to exchange with random neighbor clones
-  4. Receiver does biased coinflip (strong senders more likely to be copied)
-  5. If copy accepted, receiver clone's pattern/vote_slot blends toward sender
-  6. Session ends; returns session record for the caller to apply diffs back to live nodes
+  1. Population gate: refuse if < 1000 nodes
+  2. Select random group of 50-500 nodes
+  3. Create ephemeral clones with jittered strength (preserve original for comparison)
+  4. For each clone, on a coinflip, attempt to exchange with random neighbor clone
+  5. Receiver MUST be weaker than sender AND not on morph cooldown
+  6. If accepted, receiver clone's pattern/vote_slot blends toward sender
+  7. Session ends; returns session record for the caller to apply diffs back to live nodes
 
 RETURNS: ChatterSession with updated clone data.
 Caller in Main.jl applies clone diffs back to real nodes.
@@ -312,6 +417,15 @@ function start_chatter_session!(
         throw(ChatterError("!!! FATAL: start_chatter_session! got empty node_map_snapshot! !!!"))
     end
 
+    # GRUG: POPULATION GATE (v7.1) — chatter only for mature specimens (1000+ nodes).
+    # New specimens don't chatter. They need to grow first via /grow and /mission.
+    if length(node_map_snapshot) < MIN_POPULATION_FOR_CHATTER
+        throw(ChatterError(
+            "!!! POPULATION GATE: Chatter requires >= $(MIN_POPULATION_FOR_CHATTER) nodes, " *
+            "got $(length(node_map_snapshot)). New specimens don't chatter. !!!"
+        ))
+    end
+
     # GRUG: Mark chatter as running so main loop queues user input
     lock(CHATTER_LOCK) do
         CHATTER_RUNNING[] = true
@@ -321,29 +435,34 @@ function start_chatter_session!(
     session_start = time()
 
     try
-        # GRUG: STEP 1 - Select random group size (100-800, bounded by available nodes)
+        # GRUG: STEP 1 - Select random group size (50-500, bounded by available nodes)
+        # If fewer than CHATTER_GROUP_MIN (50) nodes, floor at whatever is available.
         max_nodes = length(node_map_snapshot)
-        group_size = rand(min(100, max_nodes):min(800, max_nodes))
+        group_floor = min(CHATTER_GROUP_MIN, max_nodes)
+        group_ceiling = min(CHATTER_GROUP_MAX, max_nodes)
+        group_size = rand(group_floor:group_ceiling)
 
         # GRUG: Shuffle and pick group
         shuffled = shuffle(node_map_snapshot)
         group = shuffled[1:group_size]
 
         # GRUG: STEP 2 - Create ephemeral clones with jittered strength
+        # Store BOTH jittered and original strength so we can do weak/strong comparison
+        # using the un-jittered original (jitter is for gossip probability, not gate logic).
         clones = ChatterNodeClone[]
         for (nid, pattern, action_packet, strength) in group
             jittered_str = jitter_clone_strength(strength)
             push!(clones, ChatterNodeClone(
-                nid, pattern, action_packet, jittered_str, Set{String}()
+                nid, pattern, action_packet, jittered_str, strength, Set{String}(), false
             ))
         end
 
         session = ChatterSession(
             session_id, session_start, 0.0, group_size,
-            clones, true, String[], 0, 0
+            clones, true, String[], 0, 0, 0, 0
         )
 
-        println("[CHATTER] 🗣  Session $session_id started. Group size: $group_size nodes.")
+        println("[CHATTER] 🗣  Session $session_id started. Group size: $group_size nodes (population: $max_nodes).")
 
         # GRUG: STEP 3 - Run gossip exchanges
         # Each clone gets a chance to send to a random neighbor clone
@@ -375,15 +494,30 @@ function start_chatter_session!(
             mark_chatted!(receiver, sender.source_id)
             session.exchanges_completed += 1
 
+            # GRUG: STRENGTH GATE (v7.1) — Only weak nodes morph.
+            # Receiver must be STRICTLY WEAKER than sender (original un-jittered strength).
+            # Strong nodes signal to weaker nodes. They do not change themselves.
+            if receiver.original_strength >= sender.original_strength
+                session.morphs_blocked_strength += 1
+                continue
+            end
+
+            # GRUG: MORPH COOLDOWN GATE (v7.1) — Once per day per node.
+            # If this receiver morphed within the last 24 hours, skip it.
+            if !is_morph_allowed(receiver.source_id)
+                session.morphs_blocked_cooldown += 1
+                continue
+            end
+
             # GRUG: STEP 4 - Receiver does BIASED coinflip.
             # Strong senders are MORE likely to be copied.
             # copy_probability = sender.strength biased [0.3, 0.8]
-            copy_prob = clamp(0.3 + sender.strength * 0.5, 0.3, 0.8)
+            copy_prob = clamp(0.3 + sender.original_strength * 0.5, 0.3, 0.8)
 
             if rand() < copy_prob
-                # GRUG: COPY ACCEPTED! Receiver blends pattern toward sender.
+                # GRUG: COPY ACCEPTED! Weak receiver blends pattern toward strong sender.
                 # Blend factor scales with sender strength [0.1, 0.4]
-                blend = clamp(0.1 + sender.strength * 0.3, 0.1, 0.4)
+                blend = clamp(0.1 + sender.original_strength * 0.3, 0.1, 0.4)
 
                 try
                     merged_pattern = merge_patterns(receiver.pattern, sender.pattern, blend)
@@ -394,6 +528,9 @@ function start_chatter_session!(
                     merged_vote = merge_patterns(receiver.vote_slot, sender.vote_slot, blend * 0.5)
                     receiver.vote_slot = merged_vote
 
+                    # GRUG: Mark this receiver as morphed and record cooldown
+                    receiver.morphed_this_session = true
+                    record_morph!(receiver.source_id)
                     session.copies_accepted += 1
                 catch e
                     # GRUG: merge_patterns failure is non-fatal in chatter context.
@@ -407,7 +544,11 @@ function start_chatter_session!(
         session.end_time = time()
         session.is_running = false
 
-        println("[CHATTER] ✅  Session $session_id complete. Exchanges: $(session.exchanges_completed), Copies: $(session.copies_accepted).")
+        println("[CHATTER] ✅  Session $session_id complete. " *
+                "Exchanges: $(session.exchanges_completed), " *
+                "Morphs: $(session.copies_accepted), " *
+                "Blocked(strength): $(session.morphs_blocked_strength), " *
+                "Blocked(cooldown): $(session.morphs_blocked_cooldown).")
 
         # GRUG: Store session in log (bounded)
         lock(CHATTER_LOG_LOCK) do
@@ -423,8 +564,14 @@ function start_chatter_session!(
     catch e
         # GRUG: If chatter session explodes, mark it dead and rethrow.
         # NEVER silently swallow errors in chatter. Main loop must know.
-        println("[CHATTER] !!! FATAL: Chatter session $session_id exploded: $e !!!")
-        rethrow(e)
+        if e isa ChatterError
+            # GRUG: ChatterErrors are expected (population gate, etc). Log and rethrow.
+            println("[CHATTER] ⛔  $session_id: $(e.msg)")
+            rethrow(e)
+        else
+            println("[CHATTER] !!! FATAL: Chatter session $session_id exploded: $e !!!")
+            rethrow(e)
+        end
     finally
         # GRUG: ALWAYS clear the running flag, even if session crashed.
         # Otherwise main loop stays frozen waiting for chatter that will never end!
@@ -443,7 +590,7 @@ end
 apply_chatter_diffs!(session::ChatterSession, node_map::Dict, node_lock::ReentrantLock)
 
 GRUG: After chatter session completes, apply the clone diffs back to the real NODE_MAP.
-Only nodes whose patterns changed in chatter get updated.
+Only nodes that ACTUALLY MORPHED during chatter get updated (v7.1: morphed_this_session flag).
 This is the "ephemeral -> real" merge step.
 
 IMPORTANT: Only pattern and action_packet are updated from chatter.
@@ -462,6 +609,9 @@ function apply_chatter_diffs!(
 
     lock(node_lock) do
         for clone in session.clones
+            # GRUG: Only apply diffs for clones that actually morphed (v7.1)
+            !clone.morphed_this_session && continue
+
             if !haskey(node_map, clone.source_id)
                 # GRUG: Node may have been graved during chatter. Skip it safely.
                 continue
@@ -517,59 +667,92 @@ function process_chatter_queue!(process_fn::Function)
 end
 
 # ==============================================================================
-# IDLE MODE SCHEDULER
+# IDLE MODE SCHEDULER (v7.1 — SHARED TIMER FOR CHATTER + PHAGY)
 # ==============================================================================
 
 """
-should_trigger_chatter(last_input_time::Float64, idle_threshold_seconds::Float64)::Bool
+should_trigger_idle(last_input_time::Float64)::Bool
 
-GRUG: Returns true if the cave has been quiet long enough to trigger a chatter round.
-idle_threshold_seconds is how long without user input before chatter starts.
-Default threshold is 30 seconds (cave is quiet = Grug gossip time).
+GRUG: Returns true if the cave has been quiet long enough to trigger an idle event.
+This is the SHARED TIMER for both chatter AND phagy (v7.1).
+Default threshold: 120 seconds (was 30s in v7). Jitter: ±30s (was ±5s).
+Idle events fire between 90s and 150s apart. Much slower, more drawn out.
+
+NOTE: This replaces the old should_trigger_chatter() function.
+Both chatter and phagy use this same timer — the 50/50 coinflip in Main.jl
+decides which one runs.
 """
-function should_trigger_chatter(
-    last_input_time::Float64,
-    idle_threshold_seconds::Float64 = 30.0
-)::Bool
-    if idle_threshold_seconds <= 0.0
+function should_trigger_idle(last_input_time::Float64)::Bool
+    if last_input_time <= 0.0
         throw(ChatterError(
-            "!!! FATAL: idle_threshold_seconds must be > 0, got $idle_threshold_seconds! !!!"
+            "!!! FATAL: should_trigger_idle got invalid last_input_time: $last_input_time! !!!"
         ))
     end
     elapsed = time() - last_input_time
-    # GRUG: Add a small random jitter to the threshold so chatter doesn't happen
-    # on a perfectly regular schedule (would look robotic and lose temporal diversity).
-    jittered_threshold = idle_threshold_seconds + (rand() * 10.0 - 5.0)
+    # GRUG: Jitter the threshold so idle events don't happen on a perfectly regular
+    # schedule. ±30s band makes it feel organic, not robotic.
+    jittered_threshold = IDLE_THRESHOLD_SECONDS + (rand() * 2.0 * IDLE_JITTER_SECONDS - IDLE_JITTER_SECONDS)
     return elapsed >= jittered_threshold
+end
+
+# GRUG: BACKWARD COMPAT — keep old function name as alias that delegates to new one.
+# Any code still calling should_trigger_chatter() will work but use the new 120s timer.
+function should_trigger_chatter(last_input_time::Float64, _idle_threshold_seconds::Float64=120.0)::Bool
+    return should_trigger_idle(last_input_time)
 end
 
 end # module ChatterMode
 
 # ==============================================================================
-# ARCHITECTURAL SPECIFICATION: CHATTER MODE LAYER
+# ARCHITECTURAL SPECIFICATION: CHATTER MODE LAYER (v7.1)
 #
-# 1. EPHEMERAL CLONE ARCHITECTURE:
+# 1. POPULATION GATE (v7.1):
+# Chatter ONLY fires if the total alive non-image node population >= 1000.
+# New specimens with < 1000 nodes are excluded. The engine needs a mature specimen
+# before idle gossip adds value. Below 1000 nodes, topology is still user-directed
+# via /grow and drop_table wiring. Chatter would destabilize immature specimens.
+#
+# 2. SLOW IDLE TIMER (v7.1):
+# Idle threshold raised from 30s to 120s, jitter band from ±5s to ±30s.
+# Both chatter and phagy share this SAME timer. One idle event fires every 90-150s.
+# The 50/50 coinflip in Main.jl decides chatter vs phagy. Much slower, more drawn out.
+#
+# 3. SMALLER GROUPS (v7.1):
+# Group size reduced from 100-800 to 50-500. If fewer than 50 eligible nodes exist
+# in the snapshot, the floor is set to whatever is available (use entire population).
+#
+# 4. WEAK-ONLY MORPH (v7.1):
+# Only receivers WEAKER than the sender can morph. Strong nodes signal but never
+# change themselves. This creates directional knowledge flow: strong nodes teach,
+# weak nodes learn. Prevents strong nodes from drifting away from their proven patterns.
+#
+# 5. ONCE-PER-DAY MORPH LIMIT (v7.1):
+# Each node tracked via MORPH_COOLDOWN_MAP (node_id -> timestamp). A node that morphed
+# cannot morph again until 24 hours (86400s) have passed. Prevents runaway drift where
+# a weak node gets blended every chatter round and loses its original identity entirely.
+#
+# 6. EPHEMERAL CLONE ARCHITECTURE:
 # Chatter operates exclusively on ChatterNodeClone structs - snapshots of real nodes.
 # Real NODE_MAP nodes are never directly mutated during chatter. Only after session
 # completion are diffs selectively applied via apply_chatter_diffs!(). This prevents
 # race conditions between chatter gossip and live user input processing.
 #
-# 2. ANTI-COLLISION MECHANISM:
+# 7. ANTI-COLLISION MECHANISM:
 # Each clone maintains a `talked_to` Set. Before any exchange, can_chat() verifies
 # the receiver hasn't been contacted this session. This prevents the same pair from
 # gossiping repeatedly in one round (echo chamber prevention).
 #
-# 3. BIASED COPY PROBABILITY:
-# When a receiver evaluates a sender's gossip packet, copy acceptance probability
-# is [0.3, 0.8] biased by sender strength. Strong senders propagate their patterns
-# more effectively, modeling biological reinforcement of successful pattern associations.
+# 8. BIASED COPY PROBABILITY:
+# When a weak receiver evaluates a strong sender's gossip packet, copy acceptance
+# probability is [0.3, 0.8] biased by sender strength. Strong senders propagate
+# their patterns more effectively, modeling biological reinforcement.
 #
-# 4. STRENGTH JITTER IN CHATTER:
+# 9. STRENGTH JITTER IN CHATTER:
 # Clone strength is jittered before gossip rounds. Weaker clones receive proportionally
 # more jitter, giving them occasional bursts of influence. This prevents permanent
 # dominance hierarchies from calcifying across chatter sessions.
 #
-# 5. INPUT QUEUE SAFETY:
+# 10. INPUT QUEUE SAFETY:
 # CHATTER_RUNNING flag gates user input in the main loop. Any input arriving during
 # a chatter session is pushed to INPUT_QUEUE and processed via process_chatter_queue!()
 # after the session completes. No user input is ever dropped.

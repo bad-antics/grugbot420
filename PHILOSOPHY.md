@@ -109,7 +109,7 @@ The Hopfield cache illustrates the flowing principle. When a node fires at high 
 
 This is not a lookup table. A lookup table is static — it is built at design time and doesn't change. The Hopfield cache is **learned at runtime**. It accumulates through use. Familiar inputs become fast. Novel inputs go through the full stochastic scan. The system doesn't control which inputs become familiar — it flows toward familiarity through use.
 
-The same principle runs through ChatterMode. During idle periods, nodes don't freeze. They gossip. Ephemeral clones of 100–800 nodes exchange patterns on a coinflip. Strong nodes are more likely to be copied. Weak nodes can still win on a flip. Over time, frequently co-activated patterns blend. The topology self-organizes without explicit direction. Nobody tells the nodes what to learn during chatter. They flow toward what is structurally related.
+The same principle runs through ChatterMode. During idle periods (once every 120s ±30s, only in mature specimens with 1000+ nodes), nodes don't freeze. They gossip. Ephemeral clones of 50–500 nodes exchange patterns on a coinflip. Only weak nodes morph — receivers must be weaker than senders, and each node can only morph once per 24 hours. Strong nodes signal but never change. Over time, weak nodes drift toward the patterns of their stronger neighbors. The topology self-organizes without explicit direction. Nobody tells the nodes what to learn during chatter. They flow toward what is structurally related.
 
 PhagyMode extends this to maintenance. Six automata — orphan pruner, strength decayer, grave recycler, cache validator, drop-table compactor, rule pruner — run one at a time during idle periods. One automaton, one cycle, Big-O safe. The system self-heals without shutting down. Biological organisms don't stop to perform maintenance; they maintain continuously, in the background, opportunistically. GrugBot does the same.
 
@@ -187,7 +187,7 @@ Compare this to a traditional AI pipeline: tokenize → embed → attend → dec
 
 The same principle runs in the opposite direction. At low ambient flow — when no input is present — the system does not go quiet. It activates differently. This is ChatterMode.
 
-During idle periods, ephemeral clones of 100–800 nodes exchange patterns on a coinflip. Strong nodes are more likely to be selected; weak nodes can still win. No input is required. The activation is driven by the internal field state, not by external pressure. Nodes gossip with their topological neighbors. Frequently co-activated patterns blend. The network restructures itself along lines of internal coherence.
+During idle periods (120s ±30s interval, 1000+ node gate), ephemeral clones of 50–500 nodes exchange patterns on a coinflip. Only weak nodes morph toward stronger senders — each limited to one morph per 24 hours. No input is required. The activation is driven by the internal field state, not by external pressure. Nodes gossip with their topological neighbors. Weak nodes drift toward strong neighbors along lines of internal coherence.
 
 This is not a bug or a workaround for absence of input. It is the system doing what the brain does during rest: consolidating, cross-linking, pruning irrelevant associations, strengthening useful ones. The low-flow state is not a deficit — it is a different mode of the same continuous field. The field never stops. It just changes its dominant frequency.
 

@@ -627,7 +627,7 @@ increasing match probability against nodes that use different but semantically e
 <!-- ================================================================ -->
 <h2 id="phagy">11. Phagy Mode: Self-Maintenance</h2>
 
-<p>Phagy cycles run during idle periods (triggered by a 50/50 coinflip when the cave has been quiet for ~30s).
+<p>Phagy cycles run during idle periods (triggered by a 50/50 coinflip when the cave has been quiet for ~120s ±30s).
 One of six maintenance automata runs per cycle:</p>
 
 <table>
@@ -659,19 +659,56 @@ One of six maintenance automata runs per cycle:</p>
 </ol>
 
 <!-- ================================================================ -->
-<h2 id="chatter">13. ChatterMode: Gossip Sessions</h2>
+<h2 id="chatter">13. ChatterMode: Gossip Sessions <span class="new-badge">v7.1</span></h2>
 
-<p>Chatter sessions simulate "dreaming" — 100-800 node clones are placed in a gossip pool
-where they exchange patterns and evolve. This creates emergent connections without user input.</p>
+<p>Chatter sessions simulate "dreaming" — 50–500 node clones are placed in a gossip pool
+where weak nodes drift toward strong neighbors. This creates directional knowledge flow:
+strong nodes signal, weak nodes learn. Chatter only fires for mature specimens with 1000+
+nodes. New specimens do not chatter.</p>
 
-<h3>Rules</h3>
+<h3>Population Gate</h3>
+<p>Chatter requires a minimum of <strong>1000 alive non-image nodes</strong>. Below this threshold,
+the specimen is too young for idle gossip — topology is still under direct user control via
+<code>/grow</code> and drop_table wiring. Chatter would destabilize immature specimens.</p>
+
+<h3>Idle Timer (Shared with Phagy)</h3>
+<p>Both chatter and phagy share the <strong>same slow idle timer</strong>: 120 seconds default,
+±30s jitter band. Idle events fire between 90s and 150s apart. A 50/50 coinflip decides
+chatter vs phagy. This is much slower than v7 (was 30s ±5s).</p>
+
+<h3>Group Size</h3>
+<p>Each chatter round selects <strong>50–500</strong> nodes (was 100–800 in v7). If fewer than
+50 eligible nodes exist, the floor is set to whatever is available (use entire population as ceiling).</p>
+
+<h3>Weak-Only Morph</h3>
+<p>Only receivers <strong>strictly weaker</strong> than the sender can accept a pattern blend.
+Strong nodes signal but never change themselves. This creates directional knowledge flow:
+proven nodes teach, unproven nodes learn. Receiver strength is compared using the original
+un-jittered value, not the chatter-jittered value.</p>
+
+<h3>Once-Per-Day Morph Limit</h3>
+<p>Each node can only morph <strong>once every 24 hours</strong> (86,400 seconds). Tracked via
+<code>MORPH_COOLDOWN_MAP</code> (node_id → last_morph_timestamp). This prevents runaway drift
+where a weak node gets blended every chatter round and loses its original identity entirely.
+After morphing, the node is locked for 24 hours before it can morph again.</p>
+
+<h3>Gossip Rules</h3>
 <ul>
-    <li>Session requires 100-800 nodes minimum</li>
-    <li>Anti-collision: nodes can't exchange with themselves</li>
-    <li>Pattern blending: tokens from exchanged patterns are merged</li>
-    <li>Action packet blending: vote slots are slightly mixed</li>
-    <li>User input during chatter is queued and drained after completion</li>
+    <li><strong>Anti-collision:</strong> nodes can\'t exchange with themselves or repeat exchanges in one round</li>
+    <li><strong>Sender coinflip:</strong> 50/50 chance to initiate gossip per clone</li>
+    <li><strong>Strength gate:</strong> receiver must be weaker than sender (original strength)</li>
+    <li><strong>Cooldown gate:</strong> receiver must not have morphed in the last 24 hours</li>
+    <li><strong>Biased copy:</strong> copy probability [0.3, 0.8] scales with sender strength</li>
+    <li><strong>Pattern blending:</strong> tokens from sender pattern are injected into receiver (blend factor [0.1, 0.4])</li>
+    <li><strong>Action packet blending:</strong> vote slots are slightly mixed (0.5× blend factor)</li>
+    <li><strong>User input during chatter:</strong> queued via INPUT_QUEUE, drained after session completion</li>
 </ul>
+
+<div class="academic-box">
+    <strong>v7.1 Chatter Summary:</strong> Idle timer 120s ±30s (shared with phagy). Population gate: 1000+ nodes.
+    Group size: 50–500. Weak-only morph with 24h cooldown. Strong nodes signal, weak nodes learn.
+    Directional knowledge flow prevents strong-node drift and weak-node identity loss.
+</div>
 
 <!-- ================================================================ -->
 <h2 id="semantic-verbs">14. SemanticVerbs: Runtime Verb Registry</h2>
@@ -891,7 +928,7 @@ is therefore instant: there is no cold-start propagation delay because there is 
 
 <p>The same principle operates in reverse. At low ambient flow — when no input is present — the system
 does not go quiet. It activates in a different mode: <strong>ChatterMode</strong>. Ephemeral clones of
-100–800 nodes exchange patterns on a coinflip. No external input is required. The activation is driven
+50–500 nodes exchange patterns on a coinflip (1000+ node population required). No external input is required. The activation is driven
 by the internal field state. The network restructures itself along lines of internal coherence — consolidating
 associations, cross-linking related patterns, pruning irrelevant connections. The low-flow state is not a
 deficit. It is the system maintaining the pre-alignment that makes instant activation possible.</p>
@@ -1113,7 +1150,16 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
 <!-- ================================================================ -->
 <div style="margin-top: 60px; border-top: 2px solid #333; padding-top: 30px;">
     <h2 style="color: #00ff88; border: none; padding: 0;">Changelog</h2>
-    <h4>v7 (Current)</h4>
+    <h4>v7.1 (Current)</h4>
+    <ul>
+        <li>ChatterMode v7.1: idle timer slowed from 30s to 120s &plusmn;30s (shared timer for both chatter and phagy)</li>
+        <li>Population gate: chatter only fires at 1000+ alive non-image nodes. New specimens skip chatter entirely.</li>
+        <li>Group size reduced from 100&ndash;800 to 50&ndash;500. Floor at available population if < 50 eligible.</li>
+        <li>Weak-only morph: only receivers strictly weaker than sender can accept pattern blend. Strong nodes signal but never change.</li>
+        <li>Once-per-day morph limit: 24h cooldown per node via <code>MORPH_COOLDOWN_MAP</code>. Prevents runaway identity drift.</li>
+        <li>Consolidated ~100 println string literals into 2 const strings (<code>BOOT_MSG</code>, <code>HELP_MSG</code>) for compiler efficiency</li>
+    </ul>
+    <h4>v7</h4>
     <ul>
         <li>Action packets v2: pipe-delimited format with inline negatives per action</li>
         <li>Lobe-aware prefrontal cortex: <code>{LOBE_CONTEXT}</code> AIML placeholder</li>
