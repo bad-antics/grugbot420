@@ -548,6 +548,115 @@ end
 # MISSION PROCESSOR (EXTRACTED FOR QUEUE REUSE)
 # ==============================================================================
 
+# ==============================================================================
+# GRUG: Consolidated UI string constants for compiler efficiency.
+# Single-string print replaces ~100 individual println calls.
+# Same output, zero string-table bloat at compile time.
+# ==============================================================================
+
+const BOOT_MSG = """
+System Online. Grug waiting at cave entrance for instructions.
+Primary  : /mission <input>                    (text or image binary)
+Feedback : /wrong                              (penalize last response voters)
+Explicit : /explicit <cmd> [<node_id>] <input>
+Grow     : /grow <single_line_json_packet>
+Rules    : /addRule <rule text> [prob=0.0-1.0]
+           Tags: {MISSION}, {PRIMARY_ACTION}, {SURE_ACTIONS}, {UNSURE_ACTIONS},
+                 {ALL_ACTIONS}, {CONFIDENCE}, {NODE_ID}, {MEMORY}, {LOBE_CONTEXT}
+Memory   : /pin <text>
+Nodes    : /nodes                              (show node map status)
+Status   : /status                             (show chatter + system status)
+Arousal  : /arousal <0.0-1.0>                 (set eye system arousal level)
+Verbs    : /addVerb <verb> <class>             (add verb to relation class)
+         : /addRelationClass <name>            (create new verb class bucket)
+         : /addSynonym <canonical> <alias>     (normalize alias->canonical)
+         : /listVerbs                          (show all verb classes + synonyms)
+Lobes    : /newLobe <id> <subject>             (create a new subject lobe)
+         : /connectLobes <id_a> <id_b>         (connect two lobes)
+         : /lobeGrow <lobe_id> <json_packet>   (grow node into specific lobe)
+         : /lobes                              (list all lobes + node counts)
+         : /tableStatus <lobe_id>              (show hash table chunks for a lobe)
+         : /tableMatch <lobe_id> <chunk> <pat> (pattern-activate entries in chunk)
+Thesaurus: /thesaurus <word1> | <word2>        (compare words/concepts dimensionally)
+         : /thesaurus <w1> | <w2> :: <ctx1> :: <ctx2>  (with context lists)
+NegThes  : /negativeThesaurus add|remove|list|check|flush
+Specimen : /saveSpecimen <filepath>            (save full cave state to compressed file)
+         : /loadSpecimen <filepath>            (restore full cave state from compressed file)
+Help     : /help                               (full command reference)
+
+╔══════════════════════════════════════════════════════════════════╗
+║  SPECIMEN SEEDING GUIDE (read before /grow)                     ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Automatic neighbor latching is SUPPRESSED below 1000 nodes.   ║
+║  Below that threshold, YOU control topology via drop_table.     ║
+║                                                                  ║
+║  For a coherent specimen from the start:                        ║
+║  1. Seed ORTHOGONAL archetypes first - distinct semantic poles. ║
+║     Don't plant 50 near-identical nodes up front.               ║
+║  2. Use required_relations as semantic GATES from day one.      ║
+║     Nodes that demand specific verbs won't fire on noise.       ║
+║  3. Name action_packets deliberately - distinct action families ║
+║     give the superposition orchestrator something to work with. ║
+║  4. Wire drop_tables manually for known co-activation pairs.    ║
+║     Don't rely on the latch system to discover semantics.       ║
+║  5. Your first ~100 nodes are the specimen's DNA.               ║
+║     The engine enforces structure at scale (1000+ nodes).       ║
+║     You enforce MEANING at the start.                           ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+
+const HELP_MSG = """
+╔══════════════════════════════════════════════════════════════╗
+║                  GRUGBOT COMMAND REFERENCE                  ║
+╠══════════════════════════════════════════════════════════════╣
+║  CORE                                                        ║
+║  /mission <text>            Send input to the AI engine      ║
+║  /wrong                     Penalize last response voters    ║
+║  /explicit <cmd> [<id>] <t> Force a specific command+node    ║
+║  /grow <json>               Plant nodes from JSON packet     ║
+║  /addRule <rule>            Add stochastic orchestration rule║
+║  /pin <text>                Pin text to memory cave wall     ║
+║                                                              ║
+║  STATUS                                                      ║
+║  /nodes                     Show all node map status         ║
+║  /status                    Full system health snapshot      ║
+║  /arousal <0.0-1.0>         Set eye system arousal level     ║
+║                                                              ║
+║  SEMANTIC VERBS                                              ║
+║  /addVerb <verb> <class>    Add verb to relation class       ║
+║  /addRelationClass <name>   Create new verb class bucket     ║
+║  /addSynonym <canon> <alias> Register synonym normalization  ║
+║  /listVerbs                 Show verb registry               ║
+║                                                              ║
+║  LOBES & TABLES                                              ║
+║  /newLobe <id> <subject>    Create new subject partition     ║
+║  /connectLobes <a> <b>      Link two lobes bidirectionally   ║
+║  /lobeGrow <id> <json>      Grow node directly into lobe     ║
+║  /lobes                     Show lobe status summary         ║
+║  /tableStatus <lobe_id>     Show hash table chunk sizes      ║
+║  /tableMatch <l> <c> <pat>  Pattern-activate table entries   ║
+║                                                              ║
+║  THESAURUS                                                   ║
+║  /thesaurus <w1> | <w2>     Dimensional similarity compare   ║
+║                                                              ║
+║  NEGATIVE THESAURUS (INHIBITION FILTER)                     ║
+║  /negativeThesaurus add <word> [--reason <text>]             ║
+║  /negativeThesaurus remove <word>                           ║
+║  /negativeThesaurus list                                    ║
+║  /negativeThesaurus check <word>                            ║
+║  /negativeThesaurus flush                                   ║
+║                                                              ║
+║  SPECIMEN PERSISTENCE                                        ║
+║  /saveSpecimen <filepath>    Save full cave to compressed gz ║
+║  /loadSpecimen <filepath>    Restore full cave from gz file  ║
+║    Saves/restores: nodes, lobes, lobe tables, Hopfield,     ║
+║    rules, messages+pins, verbs, thesaurus, inhibitions,     ║
+║    arousal, ID counters, brainstem state                    ║
+║                                                              ║
+║  /help                      Show this scroll                ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+
 # GRUG: Track last voter IDs so /wrong knows who to punish
 const LAST_VOTER_IDS = String[]
 const LAST_VOTER_LOCK = ReentrantLock()
@@ -1660,54 +1769,7 @@ end
 # ==============================================================================
 
 function run_cli()
-    println("\nSystem Online. Grug waiting at cave entrance for instructions.")
-    println("Primary  : /mission <input>                    (text or image binary)")
-    println("Feedback : /wrong                              (penalize last response voters)")
-    println("Explicit : /explicit <cmd> [<node_id>] <input>")
-    println("Grow     : /grow <single_line_json_packet>")
-    println("Rules    : /addRule <rule text> [prob=0.0-1.0]")
-    println("           Tags: {MISSION}, {PRIMARY_ACTION}, {SURE_ACTIONS}, {UNSURE_ACTIONS},")
-    println("                 {ALL_ACTIONS}, {CONFIDENCE}, {NODE_ID}, {MEMORY}, {LOBE_CONTEXT}")
-    println("Memory   : /pin <text>")
-    println("Nodes    : /nodes                              (show node map status)")
-    println("Status   : /status                             (show chatter + system status)")
-    println("Arousal  : /arousal <0.0-1.0>                 (set eye system arousal level)")
-    println("Verbs    : /addVerb <verb> <class>             (add verb to relation class)")
-    println("         : /addRelationClass <name>            (create new verb class bucket)")
-    println("         : /addSynonym <canonical> <alias>     (normalize alias->canonical)")
-    println("         : /listVerbs                          (show all verb classes + synonyms)")
-    println("Lobes    : /newLobe <id> <subject>             (create a new subject lobe)")
-    println("         : /connectLobes <id_a> <id_b>         (connect two lobes)")
-    println("         : /lobeGrow <lobe_id> <json_packet>   (grow node into specific lobe)")
-    println("         : /lobes                              (list all lobes + node counts)")
-    println("         : /tableStatus <lobe_id>              (show hash table chunks for a lobe)")
-    println("         : /tableMatch <lobe_id> <chunk> <pat> (pattern-activate entries in chunk)")
-    println("Thesaurus: /thesaurus <word1> | <word2>        (compare words/concepts dimensionally)")
-    println("         : /thesaurus <w1> | <w2> :: <ctx1> :: <ctx2>  (with context lists)")
-    println("NegThes  : /negativeThesaurus add|remove|list|check|flush")
-    println("Specimen : /saveSpecimen <filepath>            (save full cave state to compressed file)")
-    println("         : /loadSpecimen <filepath>            (restore full cave state from compressed file)")
-    println("Help     : /help                               (full command reference)")
-    println()
-    println("╔══════════════════════════════════════════════════════════════════╗")
-    println("║  SPECIMEN SEEDING GUIDE (read before /grow)                     ║")
-    println("╠══════════════════════════════════════════════════════════════════╣")
-    println("║  Automatic neighbor latching is SUPPRESSED below 1000 nodes.   ║")
-    println("║  Below that threshold, YOU control topology via drop_table.     ║")
-    println("║                                                                  ║")
-    println("║  For a coherent specimen from the start:                        ║")
-    println("║  1. Seed ORTHOGONAL archetypes first - distinct semantic poles. ║")
-    println("║     Don't plant 50 near-identical nodes up front.               ║")
-    println("║  2. Use required_relations as semantic GATES from day one.      ║")
-    println("║     Nodes that demand specific verbs won't fire on noise.       ║")
-    println("║  3. Name action_packets deliberately - distinct action families ║")
-    println("║     give the superposition orchestrator something to work with. ║")
-    println("║  4. Wire drop_tables manually for known co-activation pairs.    ║")
-    println("║     Don't rely on the latch system to discover semantics.       ║")
-    println("║  5. Your first ~100 nodes are the specimen's DNA.               ║")
-    println("║     The engine enforces structure at scale (1000+ nodes).       ║")
-    println("║     You enforce MEANING at the start.                           ║")
-    println("╚══════════════════════════════════════════════════════════════════╝")
+    print(BOOT_MSG)
     
     while true
         print("\nBrain > ")
@@ -1775,55 +1837,7 @@ function run_cli()
             
             if !isnothing(m_help)
                 # GRUG: /help - show all available CLI commands. Cave painting instruction scroll!
-                println("╔══════════════════════════════════════════════════════════════╗")
-                println("║                  GRUGBOT COMMAND REFERENCE                  ║")
-                println("╠══════════════════════════════════════════════════════════════╣")
-                println("║  CORE                                                        ║")
-                println("║  /mission <text>            Send input to the AI engine      ║")
-                println("║  /wrong                     Penalize last response voters    ║")
-                println("║  /explicit <cmd> [<id>] <t> Force a specific command+node    ║")
-                println("║  /grow <json>               Plant nodes from JSON packet     ║")
-                println("║  /addRule <rule>            Add stochastic orchestration rule║")
-                println("║  /pin <text>                Pin text to memory cave wall     ║")
-                println("║                                                              ║")
-                println("║  STATUS                                                      ║")
-                println("║  /nodes                     Show all node map status         ║")
-                println("║  /status                    Full system health snapshot      ║")
-                println("║  /arousal <0.0-1.0>         Set eye system arousal level     ║")
-                println("║                                                              ║")
-                println("║  SEMANTIC VERBS                                              ║")
-                println("║  /addVerb <verb> <class>    Add verb to relation class       ║")
-                println("║  /addRelationClass <name>   Create new verb class bucket     ║")
-                println("║  /addSynonym <canon> <alias> Register synonym normalization  ║")
-                println("║  /listVerbs                 Show verb registry               ║")
-                println("║                                                              ║")
-                println("║  LOBES & TABLES                                              ║")
-                println("║  /newLobe <id> <subject>    Create new subject partition     ║")
-                println("║  /connectLobes <a> <b>      Link two lobes bidirectionally   ║")
-                println("║  /lobeGrow <id> <json>      Grow node directly into lobe     ║")
-                println("║  /lobes                     Show lobe status summary         ║")
-                println("║  /tableStatus <lobe_id>     Show hash table chunk sizes      ║")
-                println("║  /tableMatch <l> <c> <pat>  Pattern-activate table entries   ║")
-                println("║                                                              ║")
-                println("║  THESAURUS                                                   ║")
-                println("║  /thesaurus <w1> | <w2>     Dimensional similarity compare   ║")
-                println("║                                                              ║")
-                println("║  NEGATIVE THESAURUS (INHIBITION FILTER)                     ║")
-                println("║  /negativeThesaurus add <word> [--reason <text>]             ║")
-                println("║  /negativeThesaurus remove <word>                           ║")
-                println("║  /negativeThesaurus list                                    ║")
-                println("║  /negativeThesaurus check <word>                            ║")
-                println("║  /negativeThesaurus flush                                   ║")
-                println("║                                                              ║")
-                println("║  SPECIMEN PERSISTENCE                                        ║")
-                println("║  /saveSpecimen <filepath>    Save full cave to compressed gz ║")
-                println("║  /loadSpecimen <filepath>    Restore full cave from gz file  ║")
-                println("║    Saves/restores: nodes, lobes, lobe tables, Hopfield,     ║")
-                println("║    rules, messages+pins, verbs, thesaurus, inhibitions,     ║")
-                println("║    arousal, ID counters, brainstem state                    ║")
-                println("║                                                              ║")
-                println("║  /help                      Show this scroll                ║")
-                println("╚══════════════════════════════════════════════════════════════╝")
+                print(HELP_MSG)
 
             elseif !isnothing(m_mission)
                 # GRUG: /mission - main input command. Handles text AND image binary.
