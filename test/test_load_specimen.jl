@@ -11,32 +11,32 @@ println("   SPECIMEN PERSISTENCE TEST SUITE (SAVE/LOAD)")
 println("="^70 * "\n")
 
 # GRUG: Include all modules in correct order (same as Main.jl)
-include("stochastichelper.jl")
+include("../src/stochastichelper.jl")
 using .CoinFlipHeader
 
-include("ChatterMode.jl")
+include("../src/ChatterMode.jl")
 using .ChatterMode
 
-include("PhagyMode.jl")
+include("../src/PhagyMode.jl")
 using .PhagyMode
 
-include("Thesaurus.jl")
+include("../src/Thesaurus.jl")
 using .Thesaurus
 
-include("Lobe.jl")
+include("../src/Lobe.jl")
 using .Lobe
 
-include("LobeTable.jl")
+include("../src/LobeTable.jl")
 using .LobeTable
 
-include("BrainStem.jl")
+include("../src/BrainStem.jl")
 using .BrainStem
 
-include("InputQueue.jl")
+include("../src/InputQueue.jl")
 using .InputQueue
 
 # Engine brings in PatternScanner, ImageSDF, EyeSystem, SemanticVerbs, ActionTonePredictor
-include("engine.jl")
+include("../src/engine.jl")
 
 using JSON
 using Base.Threads: Atomic, atomic_add!

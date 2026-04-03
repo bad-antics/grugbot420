@@ -1,0 +1,20 @@
+name = "GrugBot420"
+uuid = "cca5d872-df54-4153-9d0d-2ea4c0eb00c4"
+authors = ["marshalldavidson61-arch"]
+version = "0.1.0"
+
+[deps]
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[compat]
+Distributions = "0.25"
+JSON = "0.21"
+julia = "1.9"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

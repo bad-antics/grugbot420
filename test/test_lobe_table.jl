@@ -4,7 +4,7 @@
 # GRUG say: error paths tested first. No silent failures tolerated.
 
 if !isdefined(Main, :LobeTable)
-    include("LobeTable.jl")
+    include("../src/LobeTable.jl")
 end
 using .LobeTable
 using Test

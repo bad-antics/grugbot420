@@ -15,14 +15,14 @@ println("="^60)
 # ==============================================================================
 println("\n[1] MODULE LOADS")
 
-include("stochastichelper.jl");       using .CoinFlipHeader;        println("  ✓ StochasticHelper")
-include("patternscanner.jl");         using .PatternScanner;        println("  ✓ PatternScanner")
-include("ImageSDF.jl");               using .ImageSDF;              println("  ✓ ImageSDF")
-include("EyeSystem.jl");              using .EyeSystem;             println("  ✓ EyeSystem")
-include("ChatterMode.jl");            using .ChatterMode;           println("  ✓ ChatterMode")
-include("SemanticVerbs.jl");          using .SemanticVerbs;         println("  ✓ SemanticVerbs")
-include("ActionTonePredictor.jl");    using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
-include("engine.jl")
+include("../src/stochastichelper.jl");       using .CoinFlipHeader;        println("  ✓ StochasticHelper")
+include("../src/patternscanner.jl");         using .PatternScanner;        println("  ✓ PatternScanner")
+include("../src/ImageSDF.jl");               using .ImageSDF;              println("  ✓ ImageSDF")
+include("../src/EyeSystem.jl");              using .EyeSystem;             println("  ✓ EyeSystem")
+include("../src/ChatterMode.jl");            using .ChatterMode;           println("  ✓ ChatterMode")
+include("../src/SemanticVerbs.jl");          using .SemanticVerbs;         println("  ✓ SemanticVerbs")
+include("../src/ActionTonePredictor.jl");    using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
+include("../src/engine.jl")
 println("  ✓ Engine (full chain)")
 
 # ==============================================================================

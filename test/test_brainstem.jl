@@ -3,12 +3,12 @@
 # GRUG say: test dispatch, propagation, decay, fault isolation, tie-breaking, error paths.
 
 if !isdefined(Main, :Lobe)
-    include("Lobe.jl")
+    include("../src/Lobe.jl")
 end
 using .Lobe
 
 if !isdefined(Main, :BrainStem)
-    include("BrainStem.jl")
+    include("../src/BrainStem.jl")
 end
 using .BrainStem
 

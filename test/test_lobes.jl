@@ -3,7 +3,7 @@
 # GRUG say: test O(1) reverse index, capacity enforcement, lobe_grow!, and all error paths.
 
 if !isdefined(Main, :Lobe)
-    include("Lobe.jl")
+    include("../src/Lobe.jl")
 end
 using .Lobe
 using Test

@@ -10,14 +10,14 @@
 # EXCEPT the final run_cli() call by including the component files directly.
 
 if !isdefined(Main, :CoinFlipHeader)
-    include("stochastichelper.jl")
+    include("../src/stochastichelper.jl")
 end
 using .CoinFlipHeader
 
-include("engine.jl")
+include("../src/engine.jl")
 
 if !isdefined(Main, :ChatterMode)
-    include("ChatterMode.jl")
+    include("../src/ChatterMode.jl")
 end
 using .ChatterMode
 

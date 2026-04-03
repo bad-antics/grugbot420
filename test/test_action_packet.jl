@@ -10,17 +10,17 @@
 #   action_items :: Vector{Tuple{String, Float64, Vector{String}}} — (name, weight, per-action negs)
 # ==============================================================================
 
-include("stochastichelper.jl"); using .CoinFlipHeader
-include("patternscanner.jl");   using .PatternScanner
-include("ImageSDF.jl");         using .ImageSDF
-include("EyeSystem.jl");        using .EyeSystem
-include("ChatterMode.jl");      using .ChatterMode
-include("SemanticVerbs.jl");    using .SemanticVerbs
-include("ActionTonePredictor.jl"); using .ActionTonePredictor
+include("../src/stochastichelper.jl"); using .CoinFlipHeader
+include("../src/patternscanner.jl");   using .PatternScanner
+include("../src/ImageSDF.jl");         using .ImageSDF
+include("../src/EyeSystem.jl");        using .EyeSystem
+include("../src/ChatterMode.jl");      using .ChatterMode
+include("../src/SemanticVerbs.jl");    using .SemanticVerbs
+include("../src/ActionTonePredictor.jl"); using .ActionTonePredictor
 
 using JSON, Distributions, Random, Test
 
-include("engine.jl")
+include("../src/engine.jl")
 
 println("\n" * "="^60)
 println("GRUG ACTION PACKET PARSER TEST SUITE")
