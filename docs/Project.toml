@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+GrugBot420 = "cca5d872-df54-4153-9d0d-2ea4c0eb00c4"
+
+[compat]
+Documenter = "1"

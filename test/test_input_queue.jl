@@ -4,7 +4,7 @@
 # GRUG say: test the queue like testing cave door. Push, pop, overflow, inhibit.
 # ==============================================================================
 
-include("InputQueue.jl")
+include("../src/InputQueue.jl")
 using .InputQueue
 using Test
 

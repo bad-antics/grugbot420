@@ -1,30 +1,53 @@
 # 🧠 grugbot420
 
+[![CI](https://github.com/marshalldavidson61-arch/grugbot420/actions/workflows/CI.yml/badge.svg)](https://github.com/marshalldavidson61-arch/grugbot420/actions/workflows/CI.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Julia](https://img.shields.io/badge/Julia-1.9%2B-blue.svg)](https://julialang.org)
+
+
 A neuromorphic AI engine written in Julia. GrugBot models cognition through competing populations of pattern nodes — not if-else waterfalls, not transformers, not lookup tables. Many rocks compete to be loudest. Loudest rock gets to talk. Sometimes a quiet rock gets lucky (coinflip). That is how Grug think.
 
 ---
 
-## Requirements
+## Installation
 
-- [Julia](https://julialang.org/downloads/) 1.9+
-- Julia packages: `Distributions`, `JSON`, `Random` (all stdlib or registered)
-
-Install dependencies once:
+**From the Julia General Registry** (once registered):
 
 ```julia
 using Pkg
-Pkg.add(["Distributions", "JSON"])
+Pkg.add("GrugBot420")
 ```
+
+**From GitHub directly:**
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/marshalldavidson61-arch/grugbot420")
+```
+
+### Requirements
+
+- [Julia](https://julialang.org/downloads/) 1.9+
+- Dependencies (`Distributions`, `JSON`) are installed automatically via `Project.toml`
 
 ---
 
 ## Running GrugBot
 
-```bash
-julia Main.jl
+**As a package:**
+
+```julia
+using GrugBot420
+GrugBot420.main()
 ```
 
-That's it. The engine seeds three boot nodes, prints a startup banner, and drops you at the `Brain >` prompt.
+**Standalone (from the repo):**
+
+```bash
+julia src/Main.jl
+```
+
+The engine seeds three boot nodes, prints a startup banner, and drops you at the `Brain >` prompt.
 
 ---
 
@@ -226,20 +249,27 @@ Both chatter and phagy share the same slow idle timer and the same 1000+ node po
 
 ## Running Tests
 
-Each test file is standalone:
+**Via the package manager (recommended):**
+
+```julia
+using Pkg
+Pkg.test("GrugBot420")
+```
+
+**Individual test files (standalone):**
 
 ```bash
-julia test_smoke.jl            # 16 integration groups
-julia test_lobes.jl            # 123 assertions
-julia test_lobe_table.jl       # 193 assertions
-julia test_brainstem.jl        # 39 assertions
-julia test_thesaurus.jl        # 151 assertions
-julia test_chat_specimen.jl    # 18 specimens
-julia test_input_queue.jl      # 20 groups, 1095 assertions
-julia test_action_packet.jl    # 18 groups, 111 assertions
-julia test_load_specimen.jl    # 14 groups, 102 assertions
-julia test_phagy.jl            # Phagy cycle (placeholder)
-julia live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
+julia test/test_smoke.jl            # 16 integration groups
+julia test/test_lobes.jl            # 123 assertions
+julia test/test_lobe_table.jl       # 193 assertions
+julia test/test_brainstem.jl        # 39 assertions
+julia test/test_thesaurus.jl        # 151 assertions
+julia test/test_chat_specimen.jl    # 18 specimens
+julia test/test_input_queue.jl      # 20 groups, 1095 assertions
+julia test/test_action_packet.jl    # 18 groups, 111 assertions
+julia test/test_load_specimen.jl    # 14 groups, 102 assertions
+julia test/test_phagy.jl            # Phagy cycle (placeholder)
+julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
 ```
 
 ---
@@ -248,21 +278,21 @@ julia live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
 
 | File | Role |
 |---|---|
-| `Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager, specimen persistence. |
-| `engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion. |
-| `stochastichelper.jl` | `@coinflip` macro and `bias()` helper for weighted probabilistic branching. |
-| `patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. |
-| `Lobe.jl` | Subject-specific node partitions with O(1) reverse index. |
-| `LobeTable.jl` | Per-lobe chunked hash table storage (nodes, json, drop, hopfield, meta chunks). |
-| `BrainStem.jl` | Winner-take-all dispatcher with cross-lobe signal propagation and fire-count decay. |
-| `Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary, gate filter, and runtime seed injection. |
-| `InputQueue.jl` | FIFO input queue and NegativeThesaurus inhibition filter. |
-| `ChatterMode.jl` | Idle gossip system (v7.1): 50–500 ephemeral clones, 1000+ node gate, weak-only morph, 24h cooldown, 120s±30s shared timer. |
-| `PhagyMode.jl` | Six idle-time maintenance automata for self-healing map management. |
-| `EyeSystem.jl` | Visual attention: edge blurring, arousal-gated center cutout, attention modulation. |
-| `ImageSDF.jl` | JIT image → SDF parameter conversion for image node matching. |
-| `SemanticVerbs.jl` | Live mutable verb registry: causal, spatial, temporal classes + runtime synonyms. |
-| `ActionTonePredictor.jl` | Pre-vote input classifier: predicts action type and tone, nudges arousal and confidence weights. |
+| `src/Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager, specimen persistence. |
+| `src/engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion. |
+| `src/stochastichelper.jl` | `@coinflip` macro and `bias()` helper for weighted probabilistic branching. |
+| `src/patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. |
+| `src/Lobe.jl` | Subject-specific node partitions with O(1) reverse index. |
+| `src/LobeTable.jl` | Per-lobe chunked hash table storage (nodes, json, drop, hopfield, meta chunks). |
+| `src/BrainStem.jl` | Winner-take-all dispatcher with cross-lobe signal propagation and fire-count decay. |
+| `src/Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary, gate filter, and runtime seed injection. |
+| `src/InputQueue.jl` | FIFO input queue and NegativeThesaurus inhibition filter. |
+| `src/ChatterMode.jl` | Idle gossip system (v7.1): 50–500 ephemeral clones, 1000+ node gate, weak-only morph, 24h cooldown, 120s±30s shared timer. |
+| `src/PhagyMode.jl` | Six idle-time maintenance automata for self-healing map management. |
+| `src/EyeSystem.jl` | Visual attention: edge blurring, arousal-gated center cutout, attention modulation. |
+| `src/ImageSDF.jl` | JIT image → SDF parameter conversion for image node matching. |
+| `src/SemanticVerbs.jl` | Live mutable verb registry: causal, spatial, temporal classes + runtime synonyms. |
+| `src/ActionTonePredictor.jl` | Pre-vote input classifier: predicts action type and tone, nudges arousal and confidence weights. |
 | `grugbot_whitepaper.html` | Full technical documentation and architecture reference. |
 
 ---

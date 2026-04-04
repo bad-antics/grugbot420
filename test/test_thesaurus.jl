@@ -2,7 +2,7 @@
 # GRUG say: test everything. No surprises in cave.
 # GRUG say: if test fail, Grug know immediately. No silent failures.
 
-include("Thesaurus.jl")
+include("../src/Thesaurus.jl")
 using .Thesaurus: ThesaurusError, ThesaurusResult,
                   generate_ngrams, jaccard_similarity,
                   word_similarity, concept_similarity,
