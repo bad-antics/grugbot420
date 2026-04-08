@@ -154,7 +154,7 @@ function prune_orphan_nodes!(node_map::Dict, node_lock::ReentrantLock)::PhagySta
                 continue
             end
             # GRUG: Orphan condition: zero neighbors AND zero strength
-            if length(node.neighbors) <= ORPHAN_MAX_NEIGHBORS && node.strength <= 0.0
+            if length(node.neighbor_ids) <= ORPHAN_MAX_NEIGHBORS && node.strength <= 0.0
                 push!(orphan_ids, id)
             end
         end
@@ -170,7 +170,7 @@ function prune_orphan_nodes!(node_map::Dict, node_lock::ReentrantLock)::PhagySta
                     if !node.is_grave && !node.is_image_node && isempty(node.drop_table)
                         node.is_grave = true
                         graved += 1
-                        @debug "[PHAGY:ORPHAN] Graved orphan node $id (strength=$(node.strength), neighbors=$(length(node.neighbors)))"
+                        @debug "[PHAGY:ORPHAN] Graved orphan node $id (strength=$(node.strength), neighbors=$(length(node.neighbor_ids)))"
                     end
                 end
             end
@@ -268,7 +268,7 @@ function recycle_grave_assets!(node_map::Dict, node_lock::ReentrantLock)::PhagyS
             best_neighbor_id = ""
             best_strength    = -1.0
 
-            for nid in node.neighbors
+            for nid in node.neighbor_ids
                 if haskey(node_map, nid)
                     n = node_map[nid]
                     if !n.is_grave && n.strength > best_strength
