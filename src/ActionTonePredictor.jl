@@ -22,6 +22,23 @@
 # following it (e.g. "fire causes"), the chain is flagged as dangling.
 # This nudges the predicted action toward SPECULATE — the system is being asked
 # to complete a partial thought.
+#
+# TRAJECTORY NORMALIZATION & ATTRACTOR AVOIDANCE:
+# Raw lexicon scores are softmax-normalized into proper probability distributions.
+# This makes predictions length-invariant: a 3-word and a 30-word input that
+# express the same intent produce similar distributions.
+#
+# A trajectory buffer (ring buffer of last N normalized distributions) tracks
+# the system's path through action-tone space over time. Each entry decays
+# exponentially by age. The trajectory centroid (time-weighted EMA) is compared
+# against a Lorenz/Gini concentration threshold: if one category dominates the
+# trajectory history, entropy-restoring damping spreads mass to underrepresented
+# categories. This prevents strange attractors — the system cannot lock into
+# a single action/tone family indefinitely.
+#
+# The trajectory system is the Lorenz curve analog: if "wealth" (probability
+# mass) concentrates beyond the Gini threshold, redistribute. Fresh input
+# always has the strongest voice. Old predictions decay naturally.
 # ==============================================================================
 
 module ActionTonePredictor
@@ -30,7 +47,8 @@ using Random
 
 export ActionFamily, ToneFamily, PredictionResult,
        predict_action_tone, apply_prediction_to_arousal!,
-       get_action_weight_multiplier, format_prediction_summary
+       get_action_weight_multiplier, format_prediction_summary,
+       reset_trajectory!, get_trajectory_state, TrajectoryConfig
 
 # ==============================================================================
 # ENUM TYPES
@@ -67,6 +85,123 @@ struct PredictionResult
     arousal_nudge    ::Float64   # Signed delta [-1.0, 1.0] to add to current arousal
     action_weight    ::Float64   # Confidence multiplier for aligned nodes [0.5, 2.0]
     timestamp        ::Float64   # Unix timestamp of prediction (time())
+    action_distribution ::Dict{ActionFamily, Float64}  # Normalized action probabilities
+    tone_distribution   ::Dict{ToneFamily, Float64}    # Normalized tone probabilities
+    trajectory_damped   ::Bool   # True if Lorenz damping was applied this prediction
+end
+
+# ==============================================================================
+# TRAJECTORY CONFIGURATION
+# ==============================================================================
+
+"""
+    TrajectoryConfig
+
+Tuning knobs for the trajectory normalization and attractor avoidance system.
+All values have sane defaults. Callers can override via `set_trajectory_config!`.
+
+- `buffer_size`:     Ring buffer depth (how many past predictions to remember)
+- `decay_halflife`:  Seconds until a past prediction loses half its influence
+- `gini_threshold`:  Gini coefficient above which Lorenz damping activates [0.0, 1.0]
+- `damping_strength`: How much mass to redistribute when damping fires [0.0, 1.0]
+- `softmax_temperature`: Temperature for softmax normalization (lower = sharper)
+"""
+struct TrajectoryConfig
+    buffer_size        ::Int
+    decay_halflife     ::Float64
+    gini_threshold     ::Float64
+    damping_strength   ::Float64
+    softmax_temperature::Float64
+end
+
+# GRUG: Sane defaults. Buffer of 16 turns, 120s halflife, Gini threshold at 0.72
+# (roughly: one category has 60%+ of trajectory mass), mild damping at 0.25,
+# softmax temperature of 1.5 (warm — not too sharp, not too flat).
+const DEFAULT_TRAJECTORY_CONFIG = TrajectoryConfig(16, 120.0, 0.72, 0.25, 1.5)
+
+# ==============================================================================
+# TRAJECTORY STATE (module-level, reset on reload)
+# ==============================================================================
+
+# GRUG: Each trajectory entry stores a normalized distribution snapshot + timestamp.
+struct TrajectoryEntry
+    action_dist ::Dict{ActionFamily, Float64}
+    tone_dist   ::Dict{ToneFamily, Float64}
+    timestamp   ::Float64
+end
+
+# GRUG: Module-level mutable state. Ring buffer of trajectory entries.
+# Guarded by ReentrantLock for thread safety (scan can run from multiple tasks).
+const _trajectory_lock   = ReentrantLock()
+const _trajectory_buffer = Vector{TrajectoryEntry}()
+const _trajectory_config = Ref{TrajectoryConfig}(DEFAULT_TRAJECTORY_CONFIG)
+
+"""
+    reset_trajectory!()
+
+Clear all trajectory history and reset config to defaults.
+Called on module reload or explicit reset. Thread-safe.
+"""
+function reset_trajectory!()
+    lock(_trajectory_lock) do
+        empty!(_trajectory_buffer)
+        _trajectory_config[] = DEFAULT_TRAJECTORY_CONFIG
+    end
+    return nothing
+end
+
+"""
+    set_trajectory_config!(config::TrajectoryConfig)
+
+Override trajectory tuning knobs. Thread-safe.
+Validates all fields before applying — NO SILENT FAILURES.
+"""
+function set_trajectory_config!(config::TrajectoryConfig)
+    if config.buffer_size < 1
+        error("!!! FATAL: TrajectoryConfig buffer_size must be >= 1, got $(config.buffer_size) !!!")
+    end
+    if config.decay_halflife <= 0.0
+        error("!!! FATAL: TrajectoryConfig decay_halflife must be > 0.0, got $(config.decay_halflife) !!!")
+    end
+    if !(0.0 <= config.gini_threshold <= 1.0)
+        error("!!! FATAL: TrajectoryConfig gini_threshold must be in [0.0, 1.0], got $(config.gini_threshold) !!!")
+    end
+    if !(0.0 <= config.damping_strength <= 1.0)
+        error("!!! FATAL: TrajectoryConfig damping_strength must be in [0.0, 1.0], got $(config.damping_strength) !!!")
+    end
+    if config.softmax_temperature <= 0.0
+        error("!!! FATAL: TrajectoryConfig softmax_temperature must be > 0.0, got $(config.softmax_temperature) !!!")
+    end
+    lock(_trajectory_lock) do
+        _trajectory_config[] = config
+    end
+    return nothing
+end
+
+"""
+    get_trajectory_state() -> (centroid_action, centroid_tone, gini_action, gini_tone, buffer_len)
+
+Read-only snapshot of current trajectory state for diagnostics.
+Returns the time-weighted centroid distributions and their Gini coefficients.
+Thread-safe.
+"""
+function get_trajectory_state()
+    lock(_trajectory_lock) do
+        config = _trajectory_config[]
+        now    = time()
+
+        if isempty(_trajectory_buffer)
+            # GRUG: No history — return uniform distributions and zero Gini.
+            uniform_a = Dict(f => 1.0 / length(instances(ActionFamily)) for f in instances(ActionFamily))
+            uniform_t = Dict(f => 1.0 / length(instances(ToneFamily))   for f in instances(ToneFamily))
+            return (uniform_a, uniform_t, 0.0, 0.0, 0)
+        end
+
+        centroid_a, centroid_t = _compute_trajectory_centroid(now, config)
+        gini_a = _gini_coefficient(collect(values(centroid_a)))
+        gini_t = _gini_coefficient(collect(values(centroid_t)))
+        return (centroid_a, centroid_t, gini_a, gini_t, length(_trajectory_buffer))
+    end
 end
 
 # ==============================================================================
@@ -160,6 +295,238 @@ const ACTION_WEIGHT_TABLE = Dict{ActionFamily, Float64}(
 )
 
 # ==============================================================================
+# SOFTMAX NORMALIZATION
+# GRUG: Converts raw accumulator scores into a proper probability distribution.
+# This is the core length-invariance fix. A 3-word query and a 30-word query
+# that express the same intent now produce similar distributions instead of
+# the longer one having 10x raw score.
+#
+# Temperature controls sharpness:
+#   T < 1.0 → sharper (winner-take-all)
+#   T = 1.0 → standard softmax
+#   T > 1.0 → flatter (more spread)
+# Default T = 1.5 (warm — keeps minority signals alive).
+# ==============================================================================
+
+"""
+    _softmax_normalize(scores::Dict{K, Float64}, temperature::Float64) -> Dict{K, Float64}
+
+Convert raw scores into a probability distribution via temperature-scaled softmax.
+Guarantees: all values in [0,1], sum ≈ 1.0. Throws on non-positive temperature.
+"""
+function _softmax_normalize(scores::Dict{K, Float64}, temperature::Float64) where K
+    if temperature <= 0.0
+        error("!!! FATAL: softmax temperature must be > 0.0, got $temperature !!!")
+    end
+
+    # GRUG: Subtract max for numerical stability (prevents exp overflow).
+    max_score = maximum(values(scores))
+    exp_scores = Dict{K, Float64}()
+    for (k, v) in scores
+        exp_scores[k] = exp((v - max_score) / temperature)
+    end
+
+    total = sum(values(exp_scores))
+    if total <= 0.0 || !isfinite(total)
+        # GRUG: Total is zero or NaN — fall back to uniform distribution.
+        # This should never happen with proper exp() but guard against it.
+        n = length(scores)
+        return Dict(k => 1.0 / n for k in keys(scores))
+    end
+
+    return Dict(k => v / total for (k, v) in exp_scores)
+end
+
+# ==============================================================================
+# GINI COEFFICIENT
+# GRUG: The Lorenz concentration measure. Gini = 0 means perfectly uniform
+# distribution (all categories equally represented). Gini = 1 means total
+# concentration (one category has everything). We use this on the trajectory
+# centroid to detect strange attractors.
+#
+# Formula: Gini = (2 * Σ(i * sorted_val)) / (n * Σ(vals)) - (n+1)/n
+# This is the standard normalized Gini for a discrete distribution.
+# ==============================================================================
+
+"""
+    _gini_coefficient(values::Vector{Float64}) -> Float64
+
+Compute the Gini coefficient of a distribution. Returns 0.0 for empty/zero input.
+Range: [0.0, 1.0] where 0 = uniform, 1 = total concentration.
+"""
+function _gini_coefficient(vals::Vector{Float64})::Float64
+    n = length(vals)
+    if n <= 1
+        return 0.0
+    end
+
+    total = sum(vals)
+    if total <= 0.0 || !isfinite(total)
+        return 0.0
+    end
+
+    sorted = sort(vals)
+    weighted_sum = sum(i * sorted[i] for i in 1:n)
+    gini = (2.0 * weighted_sum) / (n * total) - (n + 1.0) / n
+    return clamp(gini, 0.0, 1.0)
+end
+
+# ==============================================================================
+# TRAJECTORY CENTROID COMPUTATION
+# GRUG: The trajectory centroid is the time-weighted exponential moving average
+# of all entries in the ring buffer. Recent entries weigh more. Old entries
+# decay toward zero influence. The centroid represents "where has the system
+# been spending its time in action-tone space?"
+#
+# Decay formula: weight = exp(-ln(2) * age / halflife)
+#   age = 0s  → weight = 1.0
+#   age = halflife → weight = 0.5
+#   age = 2*halflife → weight = 0.25
+# ==============================================================================
+
+# GRUG: Internal — computes time-weighted centroid from the trajectory buffer.
+# Caller must hold _trajectory_lock.
+function _compute_trajectory_centroid(
+    now    ::Float64,
+    config ::TrajectoryConfig
+)::Tuple{Dict{ActionFamily, Float64}, Dict{ToneFamily, Float64}}
+
+    n_action = length(instances(ActionFamily))
+    n_tone   = length(instances(ToneFamily))
+
+    # GRUG: Start with zero accumulators.
+    centroid_a = Dict(f => 0.0 for f in instances(ActionFamily))
+    centroid_t = Dict(f => 0.0 for f in instances(ToneFamily))
+    total_weight = 0.0
+
+    ln2 = log(2.0)
+
+    for entry in _trajectory_buffer
+        age = max(now - entry.timestamp, 0.0)
+        # GRUG: Exponential decay — halflife-based.
+        w   = exp(-ln2 * age / config.decay_halflife)
+
+        for (k, v) in entry.action_dist
+            centroid_a[k] += v * w
+        end
+        for (k, v) in entry.tone_dist
+            centroid_t[k] += v * w
+        end
+        total_weight += w
+    end
+
+    # GRUG: Normalize centroid to sum to 1.0. If total_weight is zero (all
+    # entries fully decayed), return uniform distribution.
+    if total_weight <= 0.0
+        return (
+            Dict(f => 1.0 / n_action for f in instances(ActionFamily)),
+            Dict(f => 1.0 / n_tone   for f in instances(ToneFamily))
+        )
+    end
+
+    for k in keys(centroid_a); centroid_a[k] /= total_weight; end
+    for k in keys(centroid_t); centroid_t[k] /= total_weight; end
+
+    return (centroid_a, centroid_t)
+end
+
+# ==============================================================================
+# LORENZ DAMPING
+# GRUG: When the Gini coefficient of the trajectory centroid exceeds the
+# threshold, the system is locked into a strange attractor — one category
+# dominates the trajectory history. Lorenz damping redistributes a fraction
+# of the winning category's mass to underrepresented categories.
+#
+# This is NOT applied to the trajectory itself (that's historical record).
+# It's applied to the CURRENT prediction's normalized distribution before
+# the final winner is selected. The trajectory is the diagnostic. The damping
+# is the corrective force on the present prediction.
+#
+# Damping formula:
+#   For each category in the current distribution:
+#     if category is overrepresented in trajectory (above uniform share):
+#       reduce its current score by damping_strength * overshoot
+#     if category is underrepresented in trajectory (below uniform share):
+#       boost its current score by damping_strength * undershoot
+#   Then re-normalize to sum to 1.0.
+#
+# This gently steers the system away from concentration while still respecting
+# the current input's signal. Strong current signal overcomes damping.
+# Weak current signal gets pulled toward diversity.
+# ==============================================================================
+
+"""
+    _apply_lorenz_damping(current_dist, centroid, gini, config) -> (damped_dist, was_damped)
+
+Apply Lorenz entropy-restoring damping to the current prediction distribution
+if the trajectory Gini exceeds threshold. Returns the (possibly damped)
+distribution and a boolean flag indicating whether damping was applied.
+"""
+function _apply_lorenz_damping(
+    current_dist ::Dict{K, Float64},
+    centroid     ::Dict{K, Float64},
+    gini         ::Float64,
+    config       ::TrajectoryConfig
+)::Tuple{Dict{K, Float64}, Bool} where K
+
+    # GRUG: Below threshold — no damping needed. System is exploring freely.
+    if gini < config.gini_threshold
+        return (current_dist, false)
+    end
+
+    n = length(current_dist)
+    uniform_share = 1.0 / n
+    strength = config.damping_strength
+
+    # GRUG: Scale damping intensity by how far past the threshold we are.
+    # Just barely over threshold → gentle nudge. Way over → stronger correction.
+    overshoot_ratio = clamp((gini - config.gini_threshold) / (1.0 - config.gini_threshold), 0.0, 1.0)
+    effective_strength = strength * overshoot_ratio
+
+    damped = Dict{K, Float64}()
+    for (k, v) in current_dist
+        centroid_val = get(centroid, k, uniform_share)
+        deviation = centroid_val - uniform_share
+
+        # GRUG: If this category is OVERrepresented in trajectory history,
+        # reduce its current prediction score. If UNDERrepresented, boost it.
+        # The correction is proportional to the deviation * strength.
+        adjustment = -deviation * effective_strength
+        damped[k] = max(v + adjustment, 0.0)
+    end
+
+    # GRUG: Re-normalize after damping. Must sum to 1.0.
+    total = sum(values(damped))
+    if total <= 0.0 || !isfinite(total)
+        # GRUG: Damping nuked everything — shouldn't happen but guard against it.
+        # Fall back to original distribution.
+        @warn "[PREDICTOR] Lorenz damping produced zero/NaN total — falling back to undamped distribution"
+        return (current_dist, false)
+    end
+
+    for k in keys(damped); damped[k] /= total; end
+    return (damped, true)
+end
+
+# ==============================================================================
+# TRAJECTORY BUFFER MANAGEMENT
+# ==============================================================================
+
+# GRUG: Internal — push a new entry into the ring buffer, evicting oldest if full.
+# Caller must hold _trajectory_lock.
+function _push_trajectory_entry!(action_dist::Dict{ActionFamily, Float64},
+                                  tone_dist::Dict{ToneFamily, Float64},
+                                  ts::Float64)
+    config = _trajectory_config[]
+    push!(_trajectory_buffer, TrajectoryEntry(action_dist, tone_dist, ts))
+
+    # GRUG: Ring buffer eviction — drop oldest entries beyond buffer_size.
+    while length(_trajectory_buffer) > config.buffer_size
+        popfirst!(_trajectory_buffer)
+    end
+end
+
+# ==============================================================================
 # INCOMPLETE CAUSAL CHAIN DETECTOR
 # ==============================================================================
 
@@ -208,14 +575,19 @@ end
     predict_action_tone(input_text, all_verbs) -> PredictionResult
 
 Main entry point. Scores input text against all action and tone lexicons,
-detects incomplete causal chains, and returns a `PredictionResult` carrying
-the predicted action family, tone family, confidence, arousal nudge, and
-confidence weight multiplier.
+normalizes scores via temperature-scaled softmax into proper probability
+distributions, applies Lorenz trajectory damping if the system is locked
+into a strange attractor, detects incomplete causal chains, and returns a
+`PredictionResult` carrying the predicted action family, tone family,
+confidence, arousal nudge, confidence weight multiplier, and the full
+normalized distributions.
 
 `all_verbs` should come from `SemanticVerbs.get_all_verbs()` so the live
 runtime verb registry is used for chain detection.
 
-This function does NOT modify any global state. It is pure input -> output.
+This function is thread-safe. Trajectory state is updated atomically under
+a ReentrantLock.
+
 Callers apply the results via `apply_prediction_to_arousal!` and
 `get_action_weight_multiplier`.
 """
@@ -233,7 +605,7 @@ function predict_action_tone(
 
     # GRUG: Strip trailing punctuation from tokens for clean lexicon lookup.
     # "wrong!" should hit HOSTILE_MARKERS. "what?" should hit QUERY_MARKERS.
-    tokens_clean = [replace(t, r"[,;.!?:]+$" => "") for t in tokens_low]
+    tokens_clean = [replace(t, r"[,;.!?:]+" => "") for t in tokens_low]
     tokens_clean = filter(!isempty, tokens_clean)
 
     if isempty(tokens_clean)
@@ -241,7 +613,7 @@ function predict_action_tone(
     end
 
     # ------------------------------------------------------------------
-    # STEP 1: Score action families
+    # STEP 1: Score action families (raw accumulation — same as before)
     # ------------------------------------------------------------------
     action_scores = Dict{ActionFamily, Float64}(
         ACTION_ASSERT    => 0.0,
@@ -258,7 +630,6 @@ function predict_action_tone(
     end
 
     # GRUG: ALL CAPS words (3+ chars, starts with letter) = escalation signal.
-    # isletter() used because isalpha() does not exist in Julia.
     caps_words = count(
         t -> length(t) >= 3 && t == uppercase(t) && isletter(t[1]),
         tokens_raw
@@ -282,25 +653,18 @@ function predict_action_tone(
     end
 
     # GRUG: First token is a command marker = strong imperative signal.
-    # "Run the tests" is clearly a command. "List everything" too.
     if !isempty(tokens_clean) && tokens_clean[1] in COMMAND_MARKERS
         action_scores[ACTION_COMMAND] += 0.8
     end
 
     # GRUG: If no action signal found at all, default to ASSERT.
-    # Most plain statements are assertions. Better than defaulting to nothing.
     total_action_signal = sum(values(action_scores))
     if total_action_signal < 0.5
         action_scores[ACTION_ASSERT] += 1.0
-        total_action_signal = 1.0
     end
 
-    predicted_action  = argmax(action_scores)
-    action_max_score  = action_scores[predicted_action]
-    action_confidence = clamp(action_max_score / max(total_action_signal, 1.0), 0.1, 1.0)
-
     # ------------------------------------------------------------------
-    # STEP 2: Score tone families
+    # STEP 2: Score tone families (raw accumulation — same as before)
     # ------------------------------------------------------------------
     tone_scores = Dict{ToneFamily, Float64}(
         TONE_HOSTILE     => 0.0,
@@ -311,7 +675,6 @@ function predict_action_tone(
         TONE_REFLECTIVE  => 0.0
     )
 
-    # GRUG: Per-token tone scoring.
     for tok in tokens_clean
         tok in HOSTILE_MARKERS   && (tone_scores[TONE_HOSTILE]    += 1.0)
         tok in URGENT_MARKERS    && (tone_scores[TONE_URGENT]     += 1.0)
@@ -320,13 +683,11 @@ function predict_action_tone(
         tok in REFLECTIVE_MARKERS && (tone_scores[TONE_REFLECTIVE] += 0.5)
     end
 
-    # GRUG: Multiple ALL CAPS words = hostile OR urgent. Add to both, winner takes it.
     if caps_words >= 2
         tone_scores[TONE_HOSTILE] += 0.5
         tone_scores[TONE_URGENT]  += 0.5
     end
 
-    # GRUG: Multi-word reflective phrases. Scan lowercased full string.
     input_low = lowercase(input_text)
     for phrase in REFLECTIVE_PHRASES
         if contains(input_low, phrase)
@@ -334,54 +695,129 @@ function predict_action_tone(
         end
     end
 
-    # GRUG: Query action + no hostility = probably curious, not aggressive.
     if action_scores[ACTION_QUERY] > 0.5 && tone_scores[TONE_HOSTILE] < 0.5
         tone_scores[TONE_CURIOUS] += 0.6
     end
 
-    # GRUG: No strong tone signal? Default to NEUTRAL. Baseline is calm.
+    # GRUG: No strong tone signal? Default to NEUTRAL.
     total_tone_signal = sum(values(tone_scores))
     if total_tone_signal < 0.4
         tone_scores[TONE_NEUTRAL] += 1.0
     end
 
-    predicted_tone = argmax(tone_scores)
+    # ------------------------------------------------------------------
+    # STEP 3: Softmax normalization — raw scores → probability distributions
+    # GRUG: This is the length-invariance fix. A 3-word and a 30-word query
+    # expressing the same intent now produce similar distributions.
+    # ------------------------------------------------------------------
+    config = lock(_trajectory_lock) do
+        _trajectory_config[]
+    end
+
+    action_dist = _softmax_normalize(action_scores, config.softmax_temperature)
+    tone_dist   = _softmax_normalize(tone_scores,   config.softmax_temperature)
 
     # ------------------------------------------------------------------
-    # STEP 3: Incomplete causal chain detection
+    # STEP 4: Trajectory damping — Lorenz attractor avoidance
+    # GRUG: Check the trajectory centroid's Gini coefficient. If the system
+    # has been locked into one action/tone family, apply entropy-restoring
+    # damping to the CURRENT prediction (not the history).
+    # ------------------------------------------------------------------
+    trajectory_damped = false
+
+    lock(_trajectory_lock) do
+        now = time()
+
+        if !isempty(_trajectory_buffer)
+            centroid_a, centroid_t = _compute_trajectory_centroid(now, config)
+            gini_a = _gini_coefficient(collect(values(centroid_a)))
+            gini_t = _gini_coefficient(collect(values(centroid_t)))
+
+            # GRUG: Damp action distribution if action trajectory is concentrated.
+            action_dist_new, damped_a = _apply_lorenz_damping(action_dist, centroid_a, gini_a, config)
+            if damped_a
+                for (k, v) in action_dist_new; action_dist[k] = v; end
+            end
+
+            # GRUG: Damp tone distribution if tone trajectory is concentrated.
+            tone_dist_new, damped_t = _apply_lorenz_damping(tone_dist, centroid_t, gini_t, config)
+            if damped_t
+                for (k, v) in tone_dist_new; tone_dist[k] = v; end
+            end
+
+            trajectory_damped = damped_a || damped_t
+
+            if trajectory_damped
+                @info "[PREDICTOR] 🌀 Lorenz damping active — " *
+                      "action_gini=$(round(gini_a, digits=3)), " *
+                      "tone_gini=$(round(gini_t, digits=3))"
+            end
+        end
+
+        # GRUG: Record this prediction in the trajectory buffer (post-damping).
+        # We record the damped distribution because that's what the system actually used.
+        _push_trajectory_entry!(copy(action_dist), copy(tone_dist), now)
+    end
+
+    # ------------------------------------------------------------------
+    # STEP 5: Pick winners from (possibly damped) normalized distributions
+    # ------------------------------------------------------------------
+    predicted_action = argmax(action_dist)
+    predicted_tone   = argmax(tone_dist)
+
+    # GRUG: Confidence = margin between winner and runner-up in the normalized
+    # distribution. High margin = clear signal. Low margin = ambiguous.
+    # This is more meaningful than raw score ratio because it's bounded [0,1]
+    # and reflects how much the winner stands out after normalization.
+    action_vals  = sort(collect(values(action_dist)), rev=true)
+    action_confidence = length(action_vals) >= 2 ?
+        clamp(action_vals[1] - action_vals[2], 0.05, 1.0) :
+        clamp(action_vals[1], 0.05, 1.0)
+
+    # GRUG: Scale confidence so that even a modest margin gives usable weight.
+    # Raw margin between softmax values is often small (0.1-0.3). Scale by 2.5
+    # to get a useful [0.05, 1.0] confidence range.
+    action_confidence = clamp(action_confidence * 2.5, 0.05, 1.0)
+
+    # ------------------------------------------------------------------
+    # STEP 6: Incomplete causal chain detection
     # ------------------------------------------------------------------
     is_dangling, dangling_verb = detect_incomplete_chain(tokens_clean, all_verbs)
 
-    # GRUG: Dangling verb = user left a thought incomplete. Nudge toward SPECULATE.
-    # Only switch predicted_action if SPECULATE clearly wins (0.3+ margin).
-    # Don't flip action on a whisper of evidence.
+    # GRUG: Dangling verb = user left a thought incomplete. Nudge toward SPECULATE
+    # by boosting its probability in the action distribution.
     if is_dangling
-        action_scores[ACTION_SPECULATE] += 0.5
-        new_action = argmax(action_scores)
+        speculate_boost = 0.15  # Direct probability boost
+        action_dist[ACTION_SPECULATE] = get(action_dist, ACTION_SPECULATE, 0.0) + speculate_boost
+        # Re-normalize after boost
+        total_a = sum(values(action_dist))
+        if total_a > 0.0
+            for k in keys(action_dist); action_dist[k] /= total_a; end
+        end
+
+        new_action = argmax(action_dist)
         if new_action != predicted_action &&
-           action_scores[new_action] >= action_scores[predicted_action] + 0.3
+           action_dist[new_action] >= action_dist[predicted_action] + 0.05
             predicted_action = new_action
         end
     end
 
     # ------------------------------------------------------------------
-    # STEP 4: Compute arousal nudge
+    # STEP 7: Compute arousal nudge
     # ------------------------------------------------------------------
     arousal_nudge = get(TONE_AROUSAL_NUDGE, predicted_tone, 0.0)
 
     # GRUG: ESCALATE action adds extra arousal push regardless of tone.
-    # User spiking = cave must widen attention immediately.
     if predicted_action == ACTION_ESCALATE
         arousal_nudge = clamp(arousal_nudge + 0.20, -1.0, 1.0)
     end
 
     # ------------------------------------------------------------------
-    # STEP 5: Compute confidence weight multiplier
+    # STEP 8: Compute confidence weight multiplier
     # ------------------------------------------------------------------
     base_weight   = get(ACTION_WEIGHT_TABLE, predicted_action, 1.0)
 
     # GRUG: Scale weight by confidence. Low confidence = stay near 1.0 (minimal skew).
-    # High confidence = apply full multiplier. Linear interpolation between the two.
     scaled_weight = 1.0 + (base_weight - 1.0) * action_confidence
 
     return PredictionResult(
@@ -392,7 +828,10 @@ function predict_action_tone(
         dangling_verb,
         arousal_nudge,
         scaled_weight,
-        time()
+        time(),
+        action_dist,
+        tone_dist,
+        trajectory_damped
     )
 end
 
@@ -464,14 +903,12 @@ function get_action_weight_multiplier(
     else
         # GRUG: Misaligned node gets gentle suppression. Not a hard block —
         # just a probabilistic lean. Low-confidence predictions suppress less.
-        # suppression ranges from 0.85 (high conf) to 1.0 (zero conf).
         return 0.85 + (0.15 * (1.0 - prediction.confidence))
     end
 end
 
 # GRUG: Internal keyword alignment check — does this action name sound like the
 # predicted action family? Substring match on known keywords per family.
-# Not a perfect classifier — just a fast heuristic for confidence modulation.
 function _action_name_aligns(action_name::String, family::ActionFamily)::Bool
     if family == ACTION_QUERY
         return any(kw -> contains(action_name, kw),
@@ -500,15 +937,17 @@ end
 
 Return a compact human-readable summary of a `PredictionResult`.
 Used by `/status`, debug logging, and the `@info` line in `scan_specimens`.
+Now includes trajectory damping status.
 """
 function format_prediction_summary(prediction::PredictionResult)::String
     chain_str = prediction.incomplete_chain ?
         " [dangling: '$(prediction.dangling_verb)']" : ""
+    damp_str  = prediction.trajectory_damped ? " [LORENZ-DAMPED]" : ""
     return "Action=$(prediction.action_family) | " *
            "Tone=$(prediction.tone_family) | " *
            "Conf=$(round(prediction.confidence, digits=2)) | " *
            "ArousalNudge=$(round(prediction.arousal_nudge, digits=2)) | " *
-           "Weight=$(round(prediction.action_weight, digits=2))$(chain_str)"
+           "Weight=$(round(prediction.action_weight, digits=2))$(chain_str)$(damp_str)"
 end
 
 end # module ActionTonePredictor
@@ -518,7 +957,8 @@ end # module ActionTonePredictor
 #
 # 1. PRE-VOTE MODULATION ARCHITECTURE:
 # The predictor fires before scan_specimens assembles its vote pool.
-# It does not vote, does not create nodes, and does not modify global state.
+# It does not vote, does not create nodes, and does not modify global state
+# (except trajectory buffer, which is internal to this module).
 # Its two outputs — arousal_nudge and action_weight — are applied by callers:
 #   - arousal_nudge: applied in process_mission() via apply_prediction_to_arousal!()
 #   - action_weight: applied per-node inside scan_specimens() via
@@ -534,30 +974,58 @@ end # module ActionTonePredictor
 # magnitude, clamped to [0.1, 1.0]. Default fallback is ACTION_ASSERT when
 # total signal is below 0.5.
 #
-# 3. TONE FAMILY SCORING:
-# Tone scoring follows the same accumulation pattern but is evaluated
-# independently from action scoring. This allows cross-classification:
-# e.g., ACTION_COMMAND with TONE_HOSTILE ("STOP this broken thing now!"),
-# or ACTION_QUERY with TONE_REFLECTIVE ("I wonder what causes this?").
-# Multi-word phrase markers are scanned against the full lowercased input
-# string for reflective hedges that can't be detected token-by-token.
+# 3. SOFTMAX NORMALIZATION (NEW):
+# Raw accumulated scores are converted into proper probability distributions
+# via temperature-scaled softmax. This provides length invariance: a 3-word
+# and a 30-word input expressing the same intent produce similar distributions.
+# Temperature (default 1.5) controls sharpness — warm enough to keep minority
+# signals alive, sharp enough to let clear winners dominate.
 #
-# 4. INCOMPLETE CAUSAL CHAIN DETECTION:
+# 4. TRAJECTORY MEMORY & LORENZ DAMPING (NEW):
+# A ring buffer of the last N (default 16) normalized prediction distributions
+# tracks the system's path through action-tone space. Each entry decays
+# exponentially by age (default halflife 120s). The trajectory centroid
+# (time-weighted EMA) is monitored via Gini coefficient:
+#   - Gini < threshold (0.72): system is exploring normally, no damping
+#   - Gini >= threshold: strange attractor detected — one category dominates
+#     the trajectory. Lorenz damping redistributes mass from overrepresented
+#     to underrepresented categories in the CURRENT prediction (not history).
+# This prevents the system from locking into a single action/tone family
+# indefinitely, which is the discrete analog of Lorenz curve wealth
+# redistribution to avoid chaotic concentration.
+#
+# 5. TONE FAMILY SCORING:
+# Tone scoring follows the same accumulation + softmax normalization pattern
+# but is evaluated independently from action scoring. This allows cross-
+# classification: e.g., ACTION_COMMAND with TONE_HOSTILE, or ACTION_QUERY
+# with TONE_REFLECTIVE. Multi-word phrase markers scan the full lowercased
+# input string for reflective hedges that can't be detected token-by-token.
+#
+# 6. INCOMPLETE CAUSAL CHAIN DETECTION:
 # A dangling chain is defined as a relational verb appearing in the last 1-2
 # token positions of the input with no meaningful object token following it.
-# Only punctuation tokens are allowed after the verb for the chain to qualify
-# as dangling. Detection uses the live verb set from SemanticVerbs so runtime
-# verb additions are immediately included in chain detection.
+# Detection uses the live verb set from SemanticVerbs so runtime verb additions
+# are immediately included. Dangling chains nudge SPECULATE probability in the
+# normalized distribution rather than manipulating raw scores.
 #
-# 5. CONFIDENCE WEIGHT SCALING:
+# 7. CONFIDENCE COMPUTATION (UPDATED):
+# Confidence is now derived from the margin between the winner and runner-up
+# in the normalized probability distribution. This is more meaningful than raw
+# score ratio because it reflects how much the winner stands out after
+# normalization and (potential) trajectory damping.
+#
+# 8. CONFIDENCE WEIGHT SCALING:
 # Action weight multipliers from ACTION_WEIGHT_TABLE represent the maximum boost
 # at full prediction confidence. The actual applied weight is linearly
 # interpolated between 1.0 (zero confidence) and the table value (full confidence).
-# This ensures that low-confidence predictions produce minimal modulation,
-# preventing a weak signal from aggressively skewing the scan results.
+# Low-confidence predictions produce minimal modulation.
 #
-# 6. DECOUPLING FROM EYESYSTEM:
+# 9. DECOUPLING FROM EYESYSTEM:
 # apply_prediction_to_arousal!() accepts EyeSystem's get/set functions as
 # parameters rather than importing EyeSystem directly. This keeps ActionTonePredictor
 # independently testable and prevents circular module dependencies.
+#
+# 10. THREAD SAFETY:
+# All trajectory state access is guarded by a ReentrantLock. Predictions can
+# safely fire from multiple tasks concurrently without corrupting the buffer.
 # ==============================================================================

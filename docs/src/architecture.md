@@ -122,6 +122,41 @@ Key design properties:
 - **Dual-lock order** — metric dead-ref audit acquires `history_lock` then `node_lock` (consistent ordering prevents deadlock)
 - **Configurable thresholds** — `FORENSICS_STALE_MSG_RATIO`, `FORENSICS_DEAD_REF_THRESHOLD`, `FORENSICS_PATTERN_ENTROPY_LO`, `FORENSICS_STRENGTH_SKEW_MAX`
 
+## Trajectory Normalization & Lorenz Damping
+
+The ActionTonePredictor uses **softmax normalization** and **trajectory-based attractor avoidance** to produce stable, length-invariant predictions that resist chaotic lock-in.
+
+### Softmax Normalization
+
+Raw lexicon scores (unbounded accumulators that grow with input length) are converted into proper probability distributions via temperature-scaled softmax. Temperature (default 1.5) is warm: sharp enough to let clear winners dominate, soft enough to keep minority signals alive. This makes a 3-word query and a 30-word query expressing the same intent produce similar distributions instead of the longer one having 10x raw score.
+
+### Trajectory Memory
+
+A ring buffer of the last N (default 16) normalized prediction distributions tracks the system's path through action-tone space over time. Each entry carries a timestamp. The **trajectory centroid** is the time-weighted exponential moving average of the buffer, where each entry's influence decays with a configurable halflife (default 120 seconds). The centroid answers: "where has the system been spending its time in action-tone space?"
+
+### Lorenz Damping (Strange Attractor Avoidance)
+
+The trajectory centroid is monitored via its **Gini coefficient** — a concentration measure where 0.0 = perfectly uniform distribution and 1.0 = total concentration in one category. This is the discrete analog of the Lorenz curve from economics.
+
+When the Gini coefficient exceeds a threshold (default 0.72), the system has entered a strange attractor — one action or tone family dominates the trajectory history. **Lorenz damping** activates: mass is redistributed from overrepresented categories to underrepresented ones in the *current* prediction (not the historical record). Damping intensity scales with overshoot: barely past threshold → gentle nudge, far past → stronger correction.
+
+Key properties:
+- **Applied to current prediction only** — trajectory history is an immutable diagnostic record
+- **Fresh input always wins** — damping adjusts the distribution, it doesn't override strong current signal
+- **Decay prevents stale lock-in** — old trajectory entries lose influence naturally via halflife decay
+- **Thread-safe** — all trajectory state access guarded by ReentrantLock
+- **Graceful fallback** — if trajectory math fails, raw prediction still fires normally (callers catch errors)
+
+### Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `buffer_size` | 16 | Ring buffer depth (how many past predictions to remember) |
+| `decay_halflife` | 120.0s | Seconds until a past prediction loses half its influence |
+| `gini_threshold` | 0.72 | Gini coefficient above which Lorenz damping activates |
+| `damping_strength` | 0.25 | How much mass to redistribute when damping fires |
+| `softmax_temperature` | 1.5 | Softmax temperature (lower = sharper, higher = flatter) |
+
 ## File Reference
 
 | File | Description |
@@ -131,7 +166,7 @@ Key design properties:
 | `src/ImageSDF.jl` | JIT image → SDF parameter conversion |
 | `src/EyeSystem.jl` | Visual attention and peripheral processing |
 | `src/SemanticVerbs.jl` | Live mutable verb registry |
-| `src/ActionTonePredictor.jl` | Pre-vote input classifier |
+| `src/ActionTonePredictor.jl` | Pre-vote input classifier with trajectory normalization & Lorenz damping |
 | `src/engine.jl` | Core node engine |
 | `src/Lobe.jl` | Subject-specific node partitions |
 | `src/LobeTable.jl` | Per-lobe chunked hash table storage |

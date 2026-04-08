@@ -1235,6 +1235,149 @@ end
 end
 
 # ==============================================================================
+# 43. TRAJECTORY NORMALIZATION & LORENZ DAMPING
+# GRUG: Verify softmax normalization, trajectory memory, Gini concentration
+# detection, and Lorenz entropy-restoring damping. This is the strange
+# attractor avoidance system for the action/tone predictor.
+# ==============================================================================
+println("\n[43] TRAJECTORY NORMALIZATION & LORENZ DAMPING")
+
+# GRUG: Reset trajectory state before testing — clean slate.
+ActionTonePredictor.reset_trajectory!()
+
+test_verbs_traj = Set(["causes", "makes", "produces", "triggers"])
+
+# --- 43a: Softmax normalization — distributions sum to 1.0 ---
+p1 = ActionTonePredictor.predict_action_tone("what causes the crash?", test_verbs_traj)
+action_sum = sum(values(p1.action_distribution))
+tone_sum   = sum(values(p1.tone_distribution))
+@assert abs(action_sum - 1.0) < 1e-9 "FAIL: Action distribution should sum to 1.0, got $action_sum"
+@assert abs(tone_sum - 1.0) < 1e-9   "FAIL: Tone distribution should sum to 1.0, got $tone_sum"
+@assert all(v -> v >= 0.0, values(p1.action_distribution)) "FAIL: Action dist has negative values!"
+@assert all(v -> v >= 0.0, values(p1.tone_distribution))   "FAIL: Tone dist has negative values!"
+println("  ✓ Softmax normalization: action_sum=$(round(action_sum, digits=6)), tone_sum=$(round(tone_sum, digits=6))")
+
+# --- 43b: Distributions are length-invariant ---
+# GRUG: A short and long query expressing the same intent should produce
+# similar winner probabilities. Not identical (more tokens = more signal),
+# but the softmax normalization should prevent the longer one from
+# having a wildly different distribution.
+ActionTonePredictor.reset_trajectory!()
+p_short = ActionTonePredictor.predict_action_tone("what?", test_verbs_traj)
+ActionTonePredictor.reset_trajectory!()
+p_long  = ActionTonePredictor.predict_action_tone(
+    "what is the underlying cause of the system failure when the process crashes?",
+    test_verbs_traj
+)
+# Both should pick ACTION_QUERY as winner
+@assert p_short.action_family == ActionTonePredictor.ACTION_QUERY "FAIL: Short query should be ACTION_QUERY, got $(p_short.action_family)"
+@assert p_long.action_family == ActionTonePredictor.ACTION_QUERY  "FAIL: Long query should be ACTION_QUERY, got $(p_long.action_family)"
+# Winner probability should be in same ballpark (within 0.4 of each other)
+short_winner_prob = p_short.action_distribution[ActionTonePredictor.ACTION_QUERY]
+long_winner_prob  = p_long.action_distribution[ActionTonePredictor.ACTION_QUERY]
+@assert abs(short_winner_prob - long_winner_prob) < 0.4 "FAIL: Length invariance broken — short=$(round(short_winner_prob,digits=3)) vs long=$(round(long_winner_prob,digits=3))"
+println("  ✓ Length invariance: short_query_prob=$(round(short_winner_prob, digits=3)), long_query_prob=$(round(long_winner_prob, digits=3))")
+
+# --- 43c: Trajectory buffer records entries ---
+ActionTonePredictor.reset_trajectory!()
+for _ in 1:5
+    ActionTonePredictor.predict_action_tone("hello world", test_verbs_traj)
+end
+state = ActionTonePredictor.get_trajectory_state()
+centroid_a, centroid_t, gini_a, gini_t, buf_len = state
+@assert buf_len == 5 "FAIL: Expected 5 trajectory entries, got $buf_len"
+@assert abs(sum(values(centroid_a)) - 1.0) < 1e-9 "FAIL: Action centroid should sum to 1.0"
+@assert abs(sum(values(centroid_t)) - 1.0) < 1e-9 "FAIL: Tone centroid should sum to 1.0"
+println("  ✓ Trajectory buffer: $buf_len entries, action_gini=$(round(gini_a, digits=3)), tone_gini=$(round(gini_t, digits=3))")
+
+# --- 43d: Lorenz damping triggers on concentrated trajectory ---
+# GRUG: Slam the trajectory with 16 identical ESCALATE predictions.
+# This should push the action Gini above threshold (0.72).
+# The 17th prediction should have trajectory_damped=true.
+ActionTonePredictor.reset_trajectory!()
+# Use aggressive config for testing — low threshold, strong damping
+ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
+    16,    # buffer_size
+    3600.0, # decay_halflife (long — don't let entries decay during test)
+    0.50,  # gini_threshold (lower for easier triggering)
+    0.40,  # damping_strength
+    1.5    # softmax_temperature
+))
+# Fill buffer with ESCALATE-heavy inputs
+for _ in 1:16
+    ActionTonePredictor.predict_action_tone("STOP NOW!!! CRITICAL EMERGENCY!!!", test_verbs_traj)
+end
+# Check Gini is high
+state2 = ActionTonePredictor.get_trajectory_state()
+_, _, gini_a2, _, buf_len2 = state2
+@assert buf_len2 == 16 "FAIL: Expected 16 entries, got $buf_len2"
+@assert gini_a2 > 0.3 "FAIL: After 16 identical ESCALATE inputs, action Gini should be high, got $(round(gini_a2, digits=3))"
+println("  ✓ Concentrated trajectory: gini_action=$(round(gini_a2, digits=3)) after 16 ESCALATE inputs")
+
+# GRUG: Now send a prediction and check if damping was applied.
+p_damped = ActionTonePredictor.predict_action_tone("STOP NOW!!! CRITICAL EMERGENCY!!!", test_verbs_traj)
+@assert p_damped.trajectory_damped == true "FAIL: Expected trajectory_damped=true after concentrated trajectory!"
+println("  ✓ Lorenz damping triggered on 17th prediction (trajectory_damped=true)")
+
+# --- 43e: Diverse trajectory does NOT trigger damping ---
+ActionTonePredictor.reset_trajectory!()
+ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
+    16, 3600.0, 0.72, 0.25, 1.5  # default-ish config
+))
+diverse_inputs = [
+    "what causes this?",           # QUERY
+    "run the tests",               # COMMAND
+    "this is wrong and broken",    # NEGATE
+    "maybe it could work",         # SPECULATE
+    "the system is running fine",  # ASSERT
+    "STOP NOW!!!",                 # ESCALATE
+]
+for inp in diverse_inputs
+    ActionTonePredictor.predict_action_tone(inp, test_verbs_traj)
+end
+p_diverse = ActionTonePredictor.predict_action_tone("explain the results", test_verbs_traj)
+@assert p_diverse.trajectory_damped == false "FAIL: Diverse trajectory should NOT trigger damping!"
+println("  ✓ Diverse trajectory: no damping triggered (trajectory_damped=false)")
+
+# --- 43f: Trajectory config validation — bad values should FATAL ---
+config_err_caught = false
+try
+    ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
+        0, 120.0, 0.72, 0.25, 1.5  # buffer_size=0 → invalid
+    ))
+catch e
+    if contains(string(e), "FATAL")
+        config_err_caught = true
+    end
+end
+@assert config_err_caught "FAIL: set_trajectory_config! should FATAL on buffer_size=0!"
+
+config_err_caught2 = false
+try
+    ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
+        16, 120.0, 1.5, 0.25, 1.5  # gini_threshold=1.5 → out of [0,1]
+    ))
+catch e
+    if contains(string(e), "FATAL")
+        config_err_caught2 = true
+    end
+end
+@assert config_err_caught2 "FAIL: set_trajectory_config! should FATAL on gini_threshold=1.5!"
+println("  ✓ Config validation: bad values correctly rejected with FATAL")
+
+# --- 43g: Reset clears trajectory state ---
+ActionTonePredictor.reset_trajectory!()
+state3 = ActionTonePredictor.get_trajectory_state()
+_, _, _, _, buf_len3 = state3
+@assert buf_len3 == 0 "FAIL: reset_trajectory! should clear buffer, got $buf_len3 entries"
+println("  ✓ reset_trajectory! clears buffer to 0 entries")
+
+# GRUG: Clean up — restore default config for any subsequent tests.
+ActionTonePredictor.reset_trajectory!()
+
+println("  ✅ [43] Trajectory normalization & Lorenz damping — ALL PASSED")
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

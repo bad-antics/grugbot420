@@ -55,6 +55,46 @@ The tier can only go **down**, never up. If the input demands cheap scan, the no
 - `add_relation_class!(class)` — add a new relation class
 - `add_synonym!(canonical, alias)` — register a synonym alias
 
+## Action+Tone Predictor (`ActionTonePredictor`)
+
+Pre-vote reflex prediction layer. Fires BEFORE the vote pool assembles. Classifies input into an **action family** (what the user intends to DO) and a **tone family** (HOW they sound doing it). Two outputs feed back into the cave: `arousal_nudge` (applied to EyeSystem) and `action_weight` (multiplied into node confidence during scan).
+
+### Enums
+
+- `ActionFamily` — `ACTION_ASSERT`, `ACTION_QUERY`, `ACTION_COMMAND`, `ACTION_NEGATE`, `ACTION_SPECULATE`, `ACTION_ESCALATE`
+- `ToneFamily` — `TONE_HOSTILE`, `TONE_CURIOUS`, `TONE_DECLARATIVE`, `TONE_URGENT`, `TONE_NEUTRAL`, `TONE_REFLECTIVE`
+
+### Types
+
+- `PredictionResult` — Immutable prediction packet carrying: `action_family`, `tone_family`, `confidence`, `incomplete_chain`, `dangling_verb`, `arousal_nudge`, `action_weight`, `timestamp`, `action_distribution` (normalized probability distribution over action families), `tone_distribution` (normalized over tone families), `trajectory_damped` (true if Lorenz damping was applied).
+- `TrajectoryConfig` — Tuning knobs for trajectory normalization: `buffer_size` (ring buffer depth, default 16), `decay_halflife` (seconds, default 120), `gini_threshold` (Lorenz trigger, default 0.72), `damping_strength` (redistribution intensity, default 0.25), `softmax_temperature` (normalization sharpness, default 1.5).
+
+### Core Functions
+
+- `predict_action_tone(input_text, all_verbs) → PredictionResult` — Main entry point. Scores input against lexicons, softmax-normalizes into probability distributions, applies Lorenz trajectory damping if strange attractor detected, detects incomplete causal chains. Thread-safe.
+- `apply_prediction_to_arousal!(prediction, get_arousal_fn, set_arousal_fn!)` — Apply arousal nudge to EyeSystem via decoupled function handles. No-ops on zero nudge.
+- `get_action_weight_multiplier(prediction, node_action_name) → Float64` — Returns confidence multiplier for a node based on action family alignment. Aligned > 1.0, misaligned < 1.0, weak prediction = 1.0.
+- `format_prediction_summary(prediction) → String` — Compact human-readable summary for logging. Includes `[LORENZ-DAMPED]` tag when damping was active.
+
+### Trajectory & Attractor Avoidance
+
+- `reset_trajectory!()` — Clear all trajectory history and reset config to defaults. Thread-safe.
+- `set_trajectory_config!(config::TrajectoryConfig)` — Override trajectory tuning knobs. Validates all fields — throws `FATAL` on invalid values.
+- `get_trajectory_state() → (centroid_action, centroid_tone, gini_action, gini_tone, buffer_len)` — Read-only snapshot of current trajectory state for diagnostics.
+
+### Softmax Normalization
+
+Raw lexicon scores are converted into proper probability distributions via temperature-scaled softmax. This provides **length invariance**: a 3-word and a 30-word input expressing the same intent produce similar distributions. Temperature (default 1.5) is warm — keeps minority signals alive while letting clear winners dominate.
+
+### Lorenz Damping (Strange Attractor Avoidance)
+
+A ring buffer of the last N (default 16) normalized prediction distributions tracks the system's path through action-tone space. Each entry decays exponentially by age (halflife-based). The trajectory centroid's **Gini coefficient** is monitored:
+
+- Gini < threshold (0.72): system is exploring normally — no damping
+- Gini ≥ threshold: strange attractor detected — one category dominates. **Lorenz damping** redistributes mass from overrepresented to underrepresented categories in the CURRENT prediction. This is the discrete analog of Lorenz curve wealth redistribution to avoid chaotic concentration.
+
+Damping intensity scales with overshoot: just barely past threshold → gentle nudge, way past → stronger correction. The trajectory records the damped distribution (what the system actually used), not the raw prediction.
+
 ## Lobe System (`Lobe`)
 
 - `create_lobe!(subject)` — create a named subject partition
