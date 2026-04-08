@@ -1694,7 +1694,7 @@ function load_specimen_from_file!(filepath::String)::String
     push!(lines, "  🔧  Verb classes     : $(get(counts, "verb_classes", 0)) ($(get(counts, "verbs", 0)) verbs)")
     push!(lines, "  🔤  Thesaurus words  : $(get(counts, "thesaurus_words", 0))")
     push!(lines, "  🚫  Inhibitions      : $(get(counts, "inhibitions", 0))")
-    push!(lines, "  🔗  Attachments      : $(get(counts, \"attachments\", 0))")
+    push!(lines, "  🔗  Attachments      : $(get(counts, "attachments", 0))")
     push!(lines, "  👁   Arousal          : $(EyeSystem.get_arousal())")
     push!(lines, "  🔢  ID counters      : node=$(ID_COUNTER[]), msg=$(MSG_ID_COUNTER[])")
     push!(lines, "  ─────────────────────────────────────────────")
