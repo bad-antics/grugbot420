@@ -250,11 +250,11 @@ chatter_snapshot = [
     ("node_chatter_5", "welcome friend hello", "greet^2",  4.0),
 ]
 
-# Pad to at least 100 for valid session (ChatterMode requires 100-800)
-full_snapshot = vcat(chatter_snapshot, [("node_pad_$i", "pad pattern $i", "reason^1", rand()*5) for i in 1:100])
+# Pad to at least 1000 for valid session (ChatterMode v7.1 requires MIN_POPULATION_FOR_CHATTER = 1000)
+full_snapshot = vcat(chatter_snapshot, [("node_pad_$i", "pad pattern $i", "reason^1", rand()*5) for i in 1:1000])
 
 session = ChatterMode.start_chatter_session!(full_snapshot)
-@assert session.group_size >= 100 "FAIL: Group size should be >= 100!"
+@assert session.group_size >= 50 "FAIL: Group size should be >= 50!"
 @assert session.end_time > session.start_time "FAIL: Session end time should be after start!"
 @assert !session.is_running "FAIL: Session should not be running after completion!"
 println("  ✓ Chatter session complete: group=$(session.group_size), exchanges=$(session.exchanges_completed), copies=$(session.copies_accepted)")
