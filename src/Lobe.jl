@@ -9,10 +9,10 @@
 module Lobe
 
 # GRUG: Load LobeTable before anything else. Lobe needs table ops at creation time.
-if !isdefined(Main, :LobeTable)
+if !isdefined(@__MODULE__, :LobeTable)
     include("LobeTable.jl")
+    using .LobeTable
 end
-using .LobeTable
 
 # ============================================================================
 # ERROR TYPES - GRUG hate silent failures!

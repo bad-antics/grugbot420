@@ -1,11 +1,11 @@
 # Main.jl
 
-# GRUG: Bring the stochastic coinflip helper to the top of the mountain!
-# GRUG: Guard against double-include if CoinFlipHeader already loaded by caller.
-if !isdefined(Main, :CoinFlipHeader)
+# GRUG: When loaded as part of GrugBot420 package, CoinFlipHeader is already
+# included and in scope from GrugBot420.jl. Only include/use it standalone.
+if !isdefined(@__MODULE__, :CoinFlipHeader)
     include("stochastichelper.jl")
+    using .CoinFlipHeader
 end
-using .CoinFlipHeader
 
 # GRUG: Include engine after macro is alive. Engine need coinflip!
 # Engine.jl now includes patternscanner.jl, ImageSDF.jl and EyeSystem.jl internally.
@@ -13,52 +13,52 @@ include("engine.jl")
 
 # GRUG: Bring the Chatter Mode gossip system into the cave!
 # GRUG: Guard against double-include if ChatterMode already loaded by caller.
-if !isdefined(Main, :ChatterMode)
+if !isdefined(@__MODULE__, :ChatterMode)
     include("ChatterMode.jl")
+    using .ChatterMode
 end
-using .ChatterMode
 
 # GRUG: Bring the Phagy Mode maintenance automata into the cave!
 # GRUG: Guard against double-include if PhagyMode already loaded by caller.
-if !isdefined(Main, :PhagyMode)
+if !isdefined(@__MODULE__, :PhagyMode)
     include("PhagyMode.jl")
+    using .PhagyMode
 end
-using .PhagyMode
 
 # GRUG: Bring the Thesaurus dimensional similarity engine into the cave!
 # GRUG: Guard against double-include if Thesaurus already loaded by caller.
-if !isdefined(Main, :Thesaurus)
+if !isdefined(@__MODULE__, :Thesaurus)
     include("Thesaurus.jl")
+    using .Thesaurus
 end
-using .Thesaurus
 
 # GRUG: Bring the Lobe partitioning system into the cave!
 # GRUG: Guard against double-include if Lobe already loaded by caller.
-if !isdefined(Main, :Lobe)
+if !isdefined(@__MODULE__, :Lobe)
     include("Lobe.jl")
+    using .Lobe
 end
-using .Lobe
 
 # GRUG: Bring the LobeTable hash storage system into the cave!
 # GRUG: Guard against double-include if LobeTable already loaded by caller.
-if !isdefined(Main, :LobeTable)
+if !isdefined(@__MODULE__, :LobeTable)
     include("LobeTable.jl")
+    using .LobeTable
 end
-using .LobeTable
 
 # GRUG: Bring the BrainStem winner-take-all dispatcher into the cave!
 # GRUG: Guard against double-include if BrainStem already loaded by caller.
-if !isdefined(Main, :BrainStem)
+if !isdefined(@__MODULE__, :BrainStem)
     include("BrainStem.jl")
+    using .BrainStem
 end
-using .BrainStem
 
 # GRUG: Bring the InputQueue and NegativeThesaurus inhibition system into the cave!
 # GRUG: Guard against double-include if InputQueue already loaded by caller.
-if !isdefined(Main, :InputQueue)
+if !isdefined(@__MODULE__, :InputQueue)
     include("InputQueue.jl")
+    using .InputQueue
 end
-using .InputQueue
 
 using Base64: base64decode
 
@@ -148,7 +148,7 @@ function extract_lobe_aware_context(votes::Vector{Vote})::String
         lobe_parts = String[]
         for lobe_name in sort(collect(active_lobes))
             lobe_node_count = Lobe.get_lobe_node_count(lobe_name)
-            active_node_ids = if isdefined(Main, :LobeTable) && LobeTable.table_exists(lobe_name)
+            active_node_ids = if isdefined(@__MODULE__, :LobeTable) && LobeTable.table_exists(lobe_name)
                 LobeTable.get_active_node_ids(lobe_name)
             else
                 String[]

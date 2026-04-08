@@ -5,38 +5,38 @@ using Random # GRUG: Need random to roll active node limits and scan modes!
 
 # GRUG: Bring the Pattern Scanner into the cave!
 # GRUG: Guard against double-include if PatternScanner already loaded by caller (e.g. test runner).
-if !isdefined(Main, :PatternScanner)
+if !isdefined(@__MODULE__, :PatternScanner)
     include("patternscanner.jl")
+    using .PatternScanner
 end
-using .PatternScanner
 
 # GRUG: Bring the Image SDF converter (JIT GPU-style image processing)!
 # GRUG: Guard against double-include if ImageSDF already loaded by caller.
-if !isdefined(Main, :ImageSDF)
+if !isdefined(@__MODULE__, :ImageSDF)
     include("ImageSDF.jl")
+    using .ImageSDF
 end
-using .ImageSDF
 
 # GRUG: Bring the Eye System (edge blur, attention modulation, arousal)!
 # GRUG: Guard against double-include if EyeSystem already loaded by caller.
-if !isdefined(Main, :EyeSystem)
+if !isdefined(@__MODULE__, :EyeSystem)
     include("EyeSystem.jl")
+    using .EyeSystem
 end
-using .EyeSystem
 
 # GRUG: Bring the live mutable Verb Registry (user can add verbs + synonyms at runtime)!
 # GRUG: Guard against double-include if SemanticVerbs already loaded by caller.
-if !isdefined(Main, :SemanticVerbs)
+if !isdefined(@__MODULE__, :SemanticVerbs)
     include("SemanticVerbs.jl")
+    using .SemanticVerbs
 end
-using .SemanticVerbs
 
 # GRUG: Bring the Action+Tone Predictor (pre-vote arousal tuning and confidence weighting)!
 # GRUG: Guard against double-include if ActionTonePredictor already loaded by caller.
-if !isdefined(Main, :ActionTonePredictor)
+if !isdefined(@__MODULE__, :ActionTonePredictor)
     include("ActionTonePredictor.jl")
+    using .ActionTonePredictor
 end
-using .ActionTonePredictor
 
 # ==============================================================================
 # SENSORY CONVERSION (TEXT TO SIGNAL)
@@ -841,9 +841,9 @@ function collect_drop_table_neighbors(node::Node)::Vector{String}
     # Fall back to node.drop_table vector for nodes not yet in lobe storage.
     # This handles both old-style (vector) and new-style (hash table) drop entries.
     lobe_drop_ids = String[]
-    if isdefined(Main, :LobeTable)
+    if isdefined(@__MODULE__, :LobeTable)
         # GRUG: Ask reverse index which lobe owns this node, then fetch drop chunk.
-        if isdefined(Main, :Lobe)
+        if isdefined(@__MODULE__, :Lobe)
             owning_lobe = Main.Lobe.find_lobe_for_node(node.id)
             if !isnothing(owning_lobe) && Main.LobeTable.table_exists(owning_lobe)
                 lobe_drop_ids = try
@@ -1147,7 +1147,7 @@ function scan_and_expand(input_text::String)::Vector{Tuple{String, Float64, Bool
 
     # ── PASS 2: Lobe cascade expansion (cross-lobe bridge, 60% of max primary) ─
     # GRUG: Only run cascade if LobeTable and Lobe modules are loaded.
-    if isdefined(Main, :LobeTable) && isdefined(Main, :Lobe)
+    if isdefined(@__MODULE__, :LobeTable) && isdefined(@__MODULE__, :Lobe)
         cascade_conf = max_primary_conf * 0.6
 
         # GRUG: Cascade threshold - only cascade if primary conf was meaningful
