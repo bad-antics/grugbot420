@@ -1340,29 +1340,30 @@ p_diverse = ActionTonePredictor.predict_action_tone("explain the results", test_
 println("  ✓ Diverse trajectory: no damping triggered (trajectory_damped=false)")
 
 # --- 43f: Trajectory config validation — bad values should FATAL ---
-config_err_caught = false
+# GRUG: Use Ref{Bool} to avoid Julia soft-scope ambiguity in top-level try/catch.
+config_err_1 = Ref(false)
 try
     ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
         0, 120.0, 0.72, 0.25, 1.5  # buffer_size=0 → invalid
     ))
 catch e
     if contains(string(e), "FATAL")
-        config_err_caught = true
+        config_err_1[] = true
     end
 end
-@assert config_err_caught "FAIL: set_trajectory_config! should FATAL on buffer_size=0!"
+@assert config_err_1[] "FAIL: set_trajectory_config! should FATAL on buffer_size=0!"
 
-config_err_caught2 = false
+config_err_2 = Ref(false)
 try
     ActionTonePredictor.set_trajectory_config!(ActionTonePredictor.TrajectoryConfig(
         16, 120.0, 1.5, 0.25, 1.5  # gini_threshold=1.5 → out of [0,1]
     ))
 catch e
     if contains(string(e), "FATAL")
-        config_err_caught2 = true
+        config_err_2[] = true
     end
 end
-@assert config_err_caught2 "FAIL: set_trajectory_config! should FATAL on gini_threshold=1.5!"
+@assert config_err_2[] "FAIL: set_trajectory_config! should FATAL on gini_threshold=1.5!"
 println("  ✓ Config validation: bad values correctly rejected with FATAL")
 
 # --- 43g: Reset clears trajectory state ---
