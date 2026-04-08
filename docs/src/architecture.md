@@ -47,7 +47,7 @@ The **connector pattern** (middleman) is the core of the relay system. When node
 Key properties:
 - Max 4 attachments per target node
 - Coinflip-gated: strong attachments fire more often but weak ones still have a 20% floor
-- Confidence = `max(0.1, token_overlap(connector_pattern, attached_node_pattern) + strength_bonus)`
+- Confidence = `max(0.1, token_overlap(connector_pattern, attached_node_pattern) + strength_bonus + randn() * 0.05)` (small synaptic jitter for vote diversity)
 - Connector pattern surfaces as a relay triple for generative context
 - Deduplication: no node appears twice in the expanded set
 - Fired attachments get a `bump_strength!` call (they earned it)

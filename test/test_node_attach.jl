@@ -287,8 +287,8 @@ end
         if !isempty(fired)
             fired_count += 1
             @test fired[1][1] == n1                          # node_id
-            @test fired[1][2] >= 0.1                         # Confidence floor
-            @test fired[1][2] <= 2.0                         # Reasonable upper bound
+            @test fired[1][2] >= 0.1                         # Confidence floor (jitter-safe)
+            @test fired[1][2] <= 3.0                         # Reasonable upper bound (jitter-safe)
             @test fired[1][3] == "machine learning optimization"  # Connector pattern returned
         end
     end

@@ -583,6 +583,13 @@ const ATTACHMENT_LOCK = ReentrantLock()
 # GRUG: Hard cap on how many nodes can be bolted onto one target. User said 4.
 const MAX_ATTACHMENTS = 4
 
+# GRUG: Small stochastic jitter applied to co-fired node confidence.
+# Biologically motivated — synaptic relay is noisy. Same neuron doesn't fire
+# with identical strength every time it gets woken by a relay. Keeps the vote
+# pool from collapsing to the same winner every cycle when attachments fire.
+# Magnitude is small (sigma=0.05) so it nudges but never dominates.
+const RELAY_CONF_JITTER_SIGMA = 0.05
+
 """
 attach_node!(target_id::String, attach_id::String, pattern::String)::String
 
@@ -710,7 +717,9 @@ The CONNECTOR PATTERN (middleman) is scanned against the ATTACHED NODE's own
 pattern to determine confidence. This is the core of relational fire:
   confidence = token_overlap_similarity(connector_pattern, attached_node_pattern)
              + (attached_node_strength / STRENGTH_CAP) * 0.5
+             + randn() * RELAY_CONF_JITTER_SIGMA  (biological synaptic noise)
   Minimum confidence floor of 0.1 so attached nodes always have SOME voice.
+  Jitter is small (sigma=0.05) — nudges but never dominates.
 
 The connector pattern is also returned so it can surface downstream as
 generative context — it tells the pipeline WHY these nodes were co-activated.
@@ -770,7 +779,11 @@ function fire_attachments!(target_id::String, active_count::Int, active_cap::Int
             end
             base_conf = _token_overlap_similarity(att.pattern, attach_node_ref.pattern)
             strength_bonus = attach_node_ref.strength / STRENGTH_CAP
-            confidence = max(0.1, base_conf + (strength_bonus * 0.5))
+            # GRUG: Add small stochastic jitter (sigma=RELAY_CONF_JITTER_SIGMA).
+            # Synaptic relay is biologically noisy — same node shouldn't fire with
+            # identical confidence every cycle. Nudges vote pool diversity.
+            jitter = randn() * RELAY_CONF_JITTER_SIGMA
+            confidence = max(0.1, base_conf + (strength_bonus * 0.5) + jitter)
 
             # GRUG: Return the connector pattern so generative knows WHY this relay fired.
             push!(fired, (att.node_id, confidence, att.pattern))

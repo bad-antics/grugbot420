@@ -243,7 +243,7 @@ This attaches `node_1` and `node_2` to `node_0`. The patterns (`"machine learnin
 2. Winners that pass the coinflip get their connector pattern scanned against their **own pattern** (the attached node's pattern, not the target's). This determines voting confidence:
    - Base confidence = token overlap similarity between the connector pattern and the **attached node's** pattern
    - Strength bonus = `(attachment_strength / STRENGTH_CAP) * 0.5`
-   - Final confidence = `max(0.1, base + strength_bonus)` — floor of 0.1 so attachments always have *some* voice
+   - Final confidence = `max(0.1, base + strength_bonus + randn() * 0.05)` — floor of 0.1 so attachments always have *some* voice; small jitter keeps vote pool diverse across repeated relay fires
 3. The connector pattern surfaces downstream as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so the generative pipeline knows WHY the relay fired
 4. The **active cap** (biological attention bottleneck, `rand(600:1800)`) is respected — if the relay pass hits the cap, remaining attachments are skipped
 
