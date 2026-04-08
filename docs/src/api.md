@@ -62,18 +62,18 @@ The attachment system enables explicit relational firing chains between nodes. I
 
 ### Data Structures
 
-- `AttachedNode` — Immutable struct holding `node_id::String`, `pattern::String`, `signal::Vector{Float64}` (pre-baked via `words_to_signal`)
+- `AttachedNode` — Immutable struct holding `node_id::String`, `pattern::String` (connector/middleman pattern), `signal::Vector{Float64}` (pre-baked via `words_to_signal`)
 - `ATTACHMENT_MAP` — `Dict{String, Vector{AttachedNode}}` mapping target node IDs to their attached nodes
 - `ATTACHMENT_LOCK` — `ReentrantLock` for thread-safe access
 - `MAX_ATTACHMENTS` — Hard cap of 4 attachments per target
 
 ### Functions
 
-- `attach_node!(target_id, attach_id, pattern)` — Attach a node to a target with a user-defined firing pattern. Validates: non-empty arguments, node existence, grave status, self-attach prevention, max cap, duplicate prevention. Pre-bakes the pattern into a signal vector on attach. Returns a human-readable confirmation string.
+- `attach_node!(target_id, attach_id, pattern)` — Attach a node to a target with a connector pattern (middleman). The connector pattern represents WHY these nodes are related. When the target fires, the connector pattern is scanned against the **attached node's own pattern** to determine voting confidence. Validates: non-empty arguments, node existence, grave status, self-attach prevention, max cap, duplicate prevention. Pre-bakes the pattern into a signal vector on attach. Returns a human-readable confirmation string.
 
 - `detach_node!(target_id, attach_id)` — Remove a specific attachment. Cleans up the target's entry entirely if no attachments remain. Returns a confirmation string.
 
-- `fire_attachments!(target_id, active_count, active_cap)` — Called during Pass 3 of `scan_and_expand()`. For each attached node: checks the active cap gate, verifies the node is alive, runs a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`), computes confidence from token overlap similarity + strength bonus, calls `bump_strength!` on winners. Returns `Vector{Tuple{String, Float64}}` of `(node_id, confidence)` pairs.
+- `fire_attachments!(target_id, active_count, active_cap)` — Called during Pass 3 of `scan_and_expand()`. For each attached node: checks the active cap gate, verifies the node is alive, runs a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`), scans the connector pattern against the **attached node's own pattern** (not the target's) to compute confidence + strength bonus, calls `bump_strength!` on winners. Returns `Vector{Tuple{String, Float64, String}}` of `(node_id, confidence, connector_pattern)` triples. The connector pattern surfaces downstream as a `RelationalTriple("target_id", "relay_attached", connector_pattern)` so the generative pipeline knows WHY the relay fired.
 
 - `get_attachment_summary()` — Returns a formatted string showing every target and its attached nodes with patterns, signal lengths, and slot usage. Used by the `/attachments` CLI command.
 

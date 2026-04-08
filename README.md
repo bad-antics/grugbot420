@@ -237,14 +237,15 @@ The relational fire system lets you wire nodes into explicit firing chains. When
 /nodeAttach node_0 node_1 "machine learning" node_2 "gradient descent"
 ```
 
-This attaches `node_1` and `node_2` to `node_0`. When `node_0` fires:
+This attaches `node_1` and `node_2` to `node_0`. The patterns (`"machine learning"`, `"gradient descent"`) are **connector patterns** — middleman reasons that explain WHY these nodes are related to the target. When `node_0` fires:
 
 1. Each attachment does a **strength-biased coinflip**: `scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`
-2. Winners that pass the coinflip enter the expanded vote set with a **pattern-derived confidence**:
-   - Base confidence = token overlap similarity between the attachment's pattern and the target node's pattern
+2. Winners that pass the coinflip get their connector pattern scanned against their **own pattern** (the attached node's pattern, not the target's). This determines voting confidence:
+   - Base confidence = token overlap similarity between the connector pattern and the **attached node's** pattern
    - Strength bonus = `(attachment_strength / STRENGTH_CAP) * 0.5`
    - Final confidence = `max(0.1, base + strength_bonus)` — floor of 0.1 so attachments always have *some* voice
-3. The **active cap** (biological attention bottleneck, `rand(600:1800)`) is respected — if the relay pass hits the cap, remaining attachments are skipped
+3. The connector pattern surfaces downstream as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so the generative pipeline knows WHY the relay fired
+4. The **active cap** (biological attention bottleneck, `rand(600:1800)`) is respected — if the relay pass hits the cap, remaining attachments are skipped
 
 ### Constraints & Validation
 

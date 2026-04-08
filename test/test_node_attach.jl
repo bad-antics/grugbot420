@@ -286,9 +286,10 @@ end
         fired = fire_attachments!(target, 0, 1800)  # Big cap, should not block
         if !isempty(fired)
             fired_count += 1
-            @test fired[1][1] == n1
-            @test fired[1][2] >= 0.1  # Confidence floor
-            @test fired[1][2] <= 2.0  # Reasonable upper bound
+            @test fired[1][1] == n1                          # node_id
+            @test fired[1][2] >= 0.1                         # Confidence floor
+            @test fired[1][2] <= 2.0                         # Reasonable upper bound
+            @test fired[1][3] == "machine learning optimization"  # Connector pattern returned
         end
     end
 
@@ -340,7 +341,7 @@ end
     # Fire many times — only n1 should ever appear
     for _ in 1:50
         fired = fire_attachments!(target, 0, 1800)
-        for (fid, _) in fired
+        for (fid, _, _) in fired
             @test fid == n1  # n2 is graved, should never fire
         end
     end
@@ -376,8 +377,9 @@ end
     fired_confs = Float64[]
     for _ in 1:100
         fired = fire_attachments!(target, 0, 1800)
-        for (_, conf) in fired
+        for (_, conf, connector) in fired
             push!(fired_confs, conf)
+            @test connector == "aaaaa bbbbb ccccc"  # Connector pattern returned
         end
     end
 

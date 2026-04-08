@@ -40,12 +40,15 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 
 ## Attachment Relay (Relational Fire)
 
-The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After the primary scan (Pass 1) and lobe cascade (Pass 2), the engine iterates every node in the expanded set and checks for attachments via `ATTACHMENT_MAP`. Each attached node does a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`). Winners enter the expanded vote set with pattern-derived confidence. The relay has its own independent active cap sample (`rand(600:1800)`) to respect the biological attention bottleneck.
+The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After the primary scan (Pass 1) and lobe cascade (Pass 2), the engine iterates every node in the expanded set and checks for attachments via `ATTACHMENT_MAP`. Each attached node does a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`). Winners enter the expanded vote set with connector-pattern-derived confidence. The relay has its own independent active cap sample (`rand(600:1800)`) to respect the biological attention bottleneck.
+
+The **connector pattern** (middleman) is the core of the relay system. When node A256 gets co-fired, the connector pattern is scanned against **A256's own pattern** — not the target's. This gives two things: (1) a voting confidence reflecting how relevant the relay reason is to the waking node, and (2) generative context surfaced as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so downstream knows WHY these nodes were co-activated.
 
 Key properties:
 - Max 4 attachments per target node
 - Coinflip-gated: strong attachments fire more often but weak ones still have a 20% floor
-- Confidence = `max(0.1, token_overlap(attached_pattern, target_pattern) + strength_bonus)`
+- Confidence = `max(0.1, token_overlap(connector_pattern, attached_node_pattern) + strength_bonus)`
+- Connector pattern surfaces as a relay triple for generative context
 - Deduplication: no node appears twice in the expanded set
 - Fired attachments get a `bump_strength!` call (they earned it)
 - Fully serialized in specimen save/load (section 14 / 4.14)

@@ -52,11 +52,11 @@ Launch GrugBot420 with `julia Main.jl` (standalone) or `GrugBot420.main()` (from
 
 | Command | Description |
 |---------|-------------|
-| `/nodeAttach <target> <id1> <pattern1> [...]` | Attach up to 4 nodes to a target with firing patterns. Quoted multi-word patterns supported. |
+| `/nodeAttach <target> <id1> <pattern1> [...]` | Attach up to 4 nodes to a target with connector patterns (middleman reasons). Quoted multi-word patterns supported. |
 | `/nodeDetach <target> <id>` | Remove a specific attachment from a target node |
 | `/attachments` | Show the full attachment map (all targets and their attached nodes) |
 
-When the target node fires during `scan_and_expand`, each attached node does a strength-biased coinflip. Winners enter the vote pool with confidence derived from token overlap between the attachment's pattern and the target node's pattern. The active cap (biological attention bottleneck) is respected. See the Relational Fire System section in the project README for full details.
+When the target node fires during `scan_and_expand`, each attached node does a strength-biased coinflip. Winners get their connector pattern (middleman) scanned against the **attached node's own pattern** — not the target's — to determine voting confidence. The connector pattern also surfaces as generative context explaining WHY the relay fired. The active cap (biological attention bottleneck) is respected. See the Relational Fire System section in the project README for full details.
 
 ## Specimen Persistence
 

@@ -875,7 +875,7 @@ attachment system provides <em>explicit, targeted, pattern-carrying relay links<
 The system is built on four primitives stored in <code>engine.jl</code>:
 </p>
 <ul>
-    <li><code>AttachedNode</code> &mdash; immutable struct: <code>node_id::String</code>, <code>pattern::String</code>, <code>signal::Vector{Float64}</code> (pre-baked via <code>words_to_signal</code>)</li>
+    <li><code>AttachedNode</code> &mdash; immutable struct: <code>node_id::String</code>, <code>pattern::String</code> (connector/middleman pattern), <code>signal::Vector{Float64}</code> (pre-baked via <code>words_to_signal</code>)</li>
     <li><code>ATTACHMENT_MAP</code> &mdash; <code>Dict{String, Vector{AttachedNode}}</code> mapping target node IDs to their attached nodes</li>
     <li><code>ATTACHMENT_LOCK</code> &mdash; <code>ReentrantLock</code> for thread-safe access</li>
     <li><code>MAX_ATTACHMENTS = 4</code> &mdash; hard cap per target node</li>
@@ -914,16 +914,21 @@ checks <code>ATTACHMENT_MAP</code> for attached nodes. Each attachment goes thro
         Strong attachments fire more often. Weak ones still have a 20% floor.</li>
 </ol>
 <p>
-Winners that pass all three gates enter the vote pool with a <strong>pattern-derived confidence</strong>:
+Winners that pass all three gates get their <strong>connector pattern</strong> (middleman) scanned against the
+<strong>attached node's own pattern</strong> &mdash; not the target's. The connector pattern represents WHY
+these nodes are related. Confidence is determined by how well the relay reason matches the
+waking node:
 </p>
 <div class="math-section">
-    <code>base_conf = token_overlap_similarity(attachment_pattern, target_node_pattern)</code><br>
+    <code>base_conf = token_overlap_similarity(connector_pattern, attached_node_pattern)</code><br>
     <code>strength_bonus = attachment_strength / STRENGTH_CAP &times; 0.5</code><br>
     <code>confidence = max(0.1, base_conf + strength_bonus)</code>
 </div>
 <p>
 The confidence floor of 0.1 ensures that attached nodes always have <em>some</em> voice in the quorum,
-even if the pattern overlap is minimal. Fired attachments receive a <code>bump_strength!</code> call &mdash;
+even if the pattern overlap is minimal. The connector pattern also surfaces downstream as a
+<code>RelationalTriple(target_id, "relay_attached", connector_pattern)</code> so the generative pipeline
+knows WHY the relay fired. Fired attachments receive a <code>bump_strength!</code> call &mdash;
 they earned usage credit. Deduplication ensures no node appears twice in the expanded set.
 </p>
 

@@ -553,10 +553,18 @@ end
 
 # GRUG: /nodeAttach lets user bolt up to 4 nodes onto a target node.
 # When the target fires (selected for voting), each attached node does a
-# strength-biased coinflip. Winners fire too — their user-defined pattern
-# determines confidence when they vote. This is RELATIONAL FIRE: nodes
-# ride on the coattails of a parent node's activation, gated by coinflip
-# and the biological attention bottleneck (active_cap).
+# strength-biased coinflip. Winners fire too — their user-defined CONNECTOR
+# PATTERN is scanned against the attached node's own pattern to determine
+# voting confidence. This is RELATIONAL FIRE: nodes ride on the coattails
+# of a parent node's activation, gated by coinflip and the biological
+# attention bottleneck (active_cap).
+#
+# The connector pattern is a MIDDLEMAN — it represents WHY these nodes are
+# related. When node A256 gets co-fired, the connector pattern is scanned
+# against A256's own contents (not the target's). This gives:
+#   1. A voting confidence: how well the relay reason matches the waking node
+#   2. A generative context: the connector pattern surfaces downstream so the
+#      generative pipeline knows WHY these nodes were co-activated
 #
 # GRUG: Attachment ≠ Neighbor linking. Neighbors are symmetric co-activation
 # via drop tables. Attachments are ASYMMETRIC: target fires → attached MAY fire.
@@ -564,8 +572,8 @@ end
 
 struct AttachedNode
     node_id::String          # GRUG: ID of the node being attached (must exist in NODE_MAP)
-    pattern::String          # GRUG: User-defined pattern — determines confidence when voting
-    signal::Vector{Float64}  # GRUG: Pre-baked signal from pattern (for PatternScanner compat)
+    pattern::String          # GRUG: Connector pattern — middleman reason WHY these nodes are related
+    signal::Vector{Float64}  # GRUG: Pre-baked signal from connector pattern (for PatternScanner compat)
 end
 
 # GRUG: Map from target_node_id -> Vector of AttachedNode (max MAX_ATTACHMENTS each)
@@ -578,9 +586,11 @@ const MAX_ATTACHMENTS = 4
 """
 attach_node!(target_id::String, attach_id::String, pattern::String)::String
 
-GRUG: Bolt a node onto a target node with a user-defined pattern.
+GRUG: Bolt a node onto a target node with a connector pattern (middleman).
 When target fires, attached node does a coinflip to decide if it fires too.
-The pattern determines the attached node's confidence when voting.
+The connector pattern is scanned against the ATTACHED NODE's own pattern to
+determine confidence — it represents WHY these nodes are related. The pattern
+also surfaces downstream as generative context for the relay activation.
 
 Validation (error-first, NO silent failures):
   - target_id must exist in NODE_MAP and not be grave
@@ -687,24 +697,28 @@ function detach_node!(target_id::String, attach_id::String)::String
 end
 
 """
-fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64}}
+fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64, String}}
 
 GRUG: RELATIONAL FIRE! When a target node fires, check its attachments.
 Each attached node does a strength-biased coinflip. Winners fire and return
-their (node_id, confidence) for voting. Losers are silently skipped.
+their (node_id, confidence, connector_pattern) for voting. Losers are skipped.
 
 active_count = how many nodes have already fired this scan cycle
 active_cap   = the biological attention bottleneck limit for this cycle
 
-Returned confidence is computed from the attached node's user-defined pattern:
-  confidence = token_overlap_similarity(attached_pattern, target_node_pattern)
-  * strength_bonus  (attached node's strength / STRENGTH_CAP)
+The CONNECTOR PATTERN (middleman) is scanned against the ATTACHED NODE's own
+pattern to determine confidence. This is the core of relational fire:
+  confidence = token_overlap_similarity(connector_pattern, attached_node_pattern)
+             + (attached_node_strength / STRENGTH_CAP) * 0.5
   Minimum confidence floor of 0.1 so attached nodes always have SOME voice.
 
-Returns: Vector of (node_id, confidence) pairs for nodes that won the coinflip.
+The connector pattern is also returned so it can surface downstream as
+generative context — it tells the pipeline WHY these nodes were co-activated.
+
+Returns: Vector of (node_id, confidence, connector_pattern) triples.
 """
-function fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64}}
-    fired = Tuple{String, Float64}[]
+function fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64, String}}
+    fired = Tuple{String, Float64, String}[]
 
     attachments = lock(() -> get(ATTACHMENT_MAP, target_id, AttachedNode[]), ATTACHMENT_LOCK)
     if isempty(attachments)
@@ -712,10 +726,9 @@ function fire_attachments!(target_id::String, active_count::Int, active_cap::Int
     end
 
     lock(NODE_LOCK) do
-        # GRUG: Get target node's pattern for similarity scoring
+        # GRUG: Verify target still exists. Non-fatal if gone (vanished between scan and fire).
         target_node = get(NODE_MAP, target_id, nothing)
         if isnothing(target_node)
-            # GRUG: Target vanished between scan and fire. Non-fatal, just skip.
             @warn "[ENGINE] ⚠ fire_attachments!: target '$target_id' vanished from NODE_MAP."
             return
         end
@@ -732,7 +745,7 @@ function fire_attachments!(target_id::String, active_count::Int, active_cap::Int
             # GRUG: Check attached node still exists and is alive
             attach_node_ref = get(NODE_MAP, att.node_id, nothing)
             if isnothing(attach_node_ref)
-                # GRUG: Attached node was deleted/graved. Stale attachment. Skip silently.
+                # GRUG: Attached node was deleted/graved. Stale attachment. Skip.
                 continue
             end
             if attach_node_ref.is_grave
@@ -747,20 +760,26 @@ function fire_attachments!(target_id::String, active_count::Int, active_cap::Int
                 continue
             end
 
-            # GRUG: CONFIDENCE CALCULATION from user-defined pattern.
-            # Base confidence = token overlap between attached pattern and target pattern.
-            # Strength bonus scales it up. Floor of 0.1 so attached nodes always have voice.
-            base_conf = _token_overlap_similarity(att.pattern, target_node.pattern)
+            # GRUG: CONFIDENCE CALCULATION — CONNECTOR PATTERN vs ATTACHED NODE.
+            # The connector pattern (middleman) is scanned against the ATTACHED NODE's
+            # own pattern, NOT the target's. This answers: "how relevant is the relay
+            # reason to the node being woken up?" Strength bonus scales it up.
+            # Floor of 0.1 so attached nodes always have SOME voice.
+            if isempty(att.pattern)
+                error("!!! FATAL: fire_attachments! found empty connector pattern for '$(att.node_id)' on target '$target_id'! Every attachment MUST have a pattern! !!!")
+            end
+            base_conf = _token_overlap_similarity(att.pattern, attach_node_ref.pattern)
             strength_bonus = attach_node_ref.strength / STRENGTH_CAP
             confidence = max(0.1, base_conf + (strength_bonus * 0.5))
 
-            push!(fired, (att.node_id, confidence))
+            # GRUG: Return the connector pattern so generative knows WHY this relay fired.
+            push!(fired, (att.node_id, confidence, att.pattern))
             current_active += 1
 
             # GRUG: Bump strength on the attached node (it got used!)
             bump_strength!(attach_node_ref)
 
-            println("[ENGINE] ⚡  Attachment relay: '$(att.node_id)' fired via target '$target_id' (conf=$(round(confidence, digits=3))).")
+            println("[ENGINE] ⚡  Attachment relay: '$(att.node_id)' fired via target '$target_id' (conf=$(round(confidence, digits=3)), connector=\"$(first(att.pattern, 30))\")")
         end
     end
 
@@ -787,7 +806,7 @@ function get_attachment_summary()::String
                     n = get(NODE_MAP, att.node_id, nothing)
                     isnothing(n) ? "[MISSING]" : (n.is_grave ? "[GRAVE]" : "[ALIVE str=$(round(n.strength, digits=1))]")
                 end, NODE_LOCK)
-                push!(lines, "      🔗 $(att.node_id) $node_status | pattern=\"$(first(att.pattern, 35))\"")
+                push!(lines, "      🔗 $(att.node_id) $node_status | connector=\"$(first(att.pattern, 35))\"")
             end
         end
     end
@@ -1458,19 +1477,29 @@ function scan_and_expand(input_text::String)::Vector{Tuple{String, Float64, Bool
     # GRUG: For every node that made it into the expanded set, check if it has
     # attachments. If so, fire_attachments! runs a strength-biased coinflip on
     # each attached node. Winners get added to the expanded set with their own
-    # pattern-derived confidence. active_cap is sampled once here for the relay
-    # pass so attachment firing respects the biological attention bottleneck.
+    # connector-pattern-derived confidence. The connector pattern (middleman) is
+    # scanned against the ATTACHED NODE's own pattern — not the target's — so
+    # confidence reflects how relevant the relay reason is to the waking node.
+    #
+    # The connector pattern also surfaces as a RelationalTriple in the node's
+    # context so the generative pipeline knows WHY this node was co-activated.
+    # Triple format: (target_id, "relay_attached", connector_pattern)
     relay_cap = rand(600:1800)  # GRUG: Independent cap for relay pass
     relay_count = length(expanded)
     relay_additions = Tuple{String, Float64, Bool, Vector{RelationalTriple}, Vector{RelationalTriple}}[]
 
     for (id, conf, antimatch, u_trips, n_trips) in expanded
         fired_pairs = fire_attachments!(id, relay_count, relay_cap)
-        for (fired_id, fired_conf) in fired_pairs
+        for (fired_id, fired_conf, connector_pattern) in fired_pairs
             if !(fired_id in already_included)
                 fired_node = lock(() -> get(NODE_MAP, fired_id, nothing), NODE_LOCK)
                 isnothing(fired_node) && continue
-                push!(relay_additions, (fired_id, fired_conf, false, user_triples, fired_node.relational_patterns))
+                # GRUG: Inject the connector pattern as a relay triple so generative
+                # knows WHY this node was co-fired. The triple reads:
+                #   subject=target_id, relation="relay_attached", object=connector_pattern
+                relay_triple = RelationalTriple(id, "relay_attached", connector_pattern)
+                relay_triples = vcat(fired_node.relational_patterns, [relay_triple])
+                push!(relay_additions, (fired_id, fired_conf, false, user_triples, relay_triples))
                 push!(already_included, fired_id)
                 relay_count += 1
             end
