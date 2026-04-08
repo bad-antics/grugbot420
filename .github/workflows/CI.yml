@@ -35,6 +35,8 @@ jobs:
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
       - name: Install dependencies
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: "0"
         run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run tests
         run: julia --project=. test/runtests.jl
