@@ -56,7 +56,7 @@ Launch GrugBot420 with `julia Main.jl` (standalone) or `GrugBot420.main()` (from
 | `/nodeDetach <target> <id>` | Remove a specific attachment from a target node |
 | `/attachments` | Show the full attachment map (all targets and their attached nodes) |
 
-When the target node fires during `scan_and_expand`, each attached node does a strength-biased coinflip. Winners enter the vote pool with confidence derived from token overlap between the attachment's pattern and the target node's pattern. The active cap (biological attention bottleneck) is respected. See the [Relational Fire System](../README.md#relational-fire-system-nodeattach) section in the README for full details.
+When the target node fires during `scan_and_expand`, each attached node does a strength-biased coinflip. Winners enter the vote pool with confidence derived from token overlap between the attachment's pattern and the target node's pattern. The active cap (biological attention bottleneck) is respected. See the Relational Fire System section in the project README for full details.
 
 ## Specimen Persistence
 
