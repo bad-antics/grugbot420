@@ -34,6 +34,7 @@ jobs:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
       - uses: julia-actions/cache@v2
-      - uses: julia-actions/julia-buildpkg@v1
+      - name: Install dependencies
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
       - name: Run tests
-        run: julia --project=. -e 'using Pkg; Pkg.test()'
+        run: julia --project=. test/runtests.jl
