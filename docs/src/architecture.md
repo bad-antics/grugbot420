@@ -31,7 +31,7 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 ## Node Lifecycle
 
 1. **Creation** — Nodes are planted via `/grow` with a pattern, action packet, and optional JSON data
-2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching with selective scan tiers (cheap/medium/high-res) based on both input complexity and per-node pattern complexity
+2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching with selective scan tiers (cheap/medium/high-res) based on both input complexity and per-node pattern complexity. Tier-1 (cheap scan) nodes use **bidirectional scanning**: forward pass + reverse-signal pass, confidence smoothed as the average of both. This catches order-reversed token matches that forward-only scanning misses.
 3. **Attachment Relay** — Nodes that fired are checked for attachments; attached nodes do a strength-biased coinflip and winners join the vote pool (Pass 3 of `scan_and_expand`)
 4. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
 5. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override
@@ -69,6 +69,18 @@ Key properties:
 - Deduplication: no node appears twice in the expanded set
 - Fired attachments get a `bump_strength!` call (they earned it)
 - Fully serialized in specimen save/load (section 14 / 4.14), with backward compat re-baking
+
+### Selective Scan Tiers + Bidirectional Smoothing
+
+Pattern scan complexity is two-layered: `screen_input_complexity()` sets a base tier from input signal length and relational triple count (tier 1/2/3). `_effective_scan_mode()` then applies a per-node downgrade — a 2-token node never justifies a high-res O(n²) scan regardless of input complexity.
+
+| Effective tier | Scan function | Notes |
+|---|---|---|
+| 1 (≤ 3 signal elements) | `_bidirectional_cheap_scan` | forward + reverse, confidence smoothed |
+| 2 (≤ 8 signal elements) | `medium_scan` | every index, single direction |
+| 3 (> 8 signal elements) | `high_res_scan` | two-pass variance penalty |
+
+**Bidirectional smoothing (tier 1):** `_bidirectional_cheap_scan()` runs `cheap_scan` forward and in reverse (reversed pattern signal). Confidence is the average of both contributions. The miss contribution for a failed direction is `threshold - 0.01` (not zero) — this softens but doesn't zero-out the average, preventing a lucky single-direction spike from inflating the score. If both directions miss, `PatternNotFoundError` propagates normally. This resolves the order-sensitivity of signal encoding: `words_to_signal("man bites dog")` and `words_to_signal("dog bites man")` produce different vectors, but bidirectional scan finds the alignment from either direction.
 
 ## PhagyMode (Idle Maintenance Automata)
 

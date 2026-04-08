@@ -1006,6 +1006,140 @@ end
 end
 
 # ==============================================================================
+# 35. BIDIRECTIONAL CHEAP SCAN — forward + reverse smoothing
+# ==============================================================================
+@testset "BidirectionalScan - Both directions fire" begin
+    # GRUG: _bidirectional_cheap_scan must find a match when pattern is reversed
+    # relative to a matching region in the target.
+
+    # Construct a target signal and a pattern that only aligns in reverse.
+    # target = [0.1, 0.2, 0.3, 0.4, 0.5, 0.1, 0.2]
+    # pattern_fwd = [0.4, 0.5]  — aligns at position 4 in forward pass
+    # pattern_rev = [0.5, 0.4]  — reverse of [0.4, 0.5]; forward pass would
+    #                              align this at a different position or miss
+    target_sig   = [0.1, 0.2, 0.3, 0.4, 0.5, 0.1, 0.2]
+    pattern_fwd  = [0.4, 0.5]   # forward match at idx 4
+    pattern_rev  = [0.5, 0.4]   # reverse match — forward pass on this finds reverse alignment
+
+    # GRUG: Forward-only cheap_scan finds pattern_fwd directly
+    _, fwd_conf = cheap_scan(target_sig, pattern_fwd; threshold=0.1)
+    @test fwd_conf > 0.5
+
+    # GRUG: Bidirectional on pattern_rev: forward pass will struggle (0.5 then 0.4
+    # doesn't appear contiguously in target), but reverse pass sees [0.4, 0.5] -> hits.
+    # Smoothed result should still be >= threshold and represent the real match.
+    idx, smoothed = _bidirectional_cheap_scan(target_sig, pattern_rev; threshold=0.1)
+    @test smoothed > 0.0    # GRUG: At least one direction found something
+    @test idx >= 1           # GRUG: Valid index returned
+
+    println("  ✓ [35] Bidirectional: reversed pattern found via reverse pass, confidence smoothed")
+end
+
+# ==============================================================================
+# 36. BIDIRECTIONAL CHEAP SCAN — both directions miss → PatternNotFoundError
+# ==============================================================================
+@testset "BidirectionalScan - Both miss propagates error" begin
+    # GRUG: If neither forward nor reverse finds a match, PatternNotFoundError
+    # must propagate. NO SILENT FAILURE — don't return 0.0 confidence quietly.
+
+    target_sig  = [0.1, 0.1, 0.1, 0.1, 0.1]  # flat signal
+    pattern_sig = [0.9, 0.9, 0.9]             # completely mismatched pattern
+
+    @test_throws PatternNotFoundError _bidirectional_cheap_scan(
+        target_sig, pattern_sig; threshold=0.8
+    )
+
+    println("  ✓ [36] Bidirectional: both directions miss → PatternNotFoundError (no silent failure)")
+end
+
+# ==============================================================================
+# 37. BIDIRECTIONAL CHEAP SCAN — smoothed confidence < single-direction spike
+# ==============================================================================
+@testset "BidirectionalScan - Smoothing dampens one-sided spike" begin
+    # GRUG: If only forward hits (reverse misses), smoothed confidence should be
+    # LESS than the forward-only confidence alone. This is the key property:
+    # bidirectional smoothing prevents a lucky forward spike from inflating score.
+
+    target_sig  = [0.1, 0.2, 0.8, 0.9, 0.1, 0.1, 0.1]
+    pattern_sig = [0.8, 0.9]  # strong forward match at idx 3; reverse [0.9, 0.8] may miss
+
+    # Get raw forward confidence for comparison
+    _, raw_fwd_conf = cheap_scan(target_sig, pattern_sig; threshold=0.1)
+
+    # Get bidirectional smoothed confidence
+    _, smoothed_conf = _bidirectional_cheap_scan(target_sig, pattern_sig; threshold=0.1)
+
+    # GRUG: Smoothed should be <= raw forward confidence.
+    # If reverse also hits, they average up — but smoothed is never MORE than
+    # the better of the two (it's the average, so bounded above by max).
+    @test smoothed_conf <= raw_fwd_conf + 1e-9  # At most equal (when both hit same)
+
+    # GRUG: Smoothed must still be >= 0 and finite
+    @test smoothed_conf >= 0.0
+    @test isfinite(smoothed_conf)
+
+    println("  ✓ [37] Bidirectional: smoothed conf ($(round(smoothed_conf, digits=3))) ≤ raw fwd conf ($(round(raw_fwd_conf, digits=3)))")
+end
+
+# ==============================================================================
+# 38. BIDIRECTIONAL CHEAP SCAN — identical pattern hits both directions equally
+# ==============================================================================
+@testset "BidirectionalScan - Symmetric pattern averages cleanly" begin
+    # GRUG: A symmetric pattern (palindrome-like signal) should produce nearly
+    # identical forward and reverse confidences. Smoothed ≈ either direction.
+
+    target_sig   = [0.1, 0.5, 0.5, 0.1, 0.1, 0.5, 0.5, 0.1]
+    pattern_sym  = [0.5, 0.5]  # Symmetric: reverse is identical
+
+    _, fwd_conf = cheap_scan(target_sig, pattern_sym; threshold=0.1)
+    _, smoothed = _bidirectional_cheap_scan(target_sig, pattern_sym; threshold=0.1)
+
+    # GRUG: Forward and reverse identical → smoothed == forward within float precision
+    @test smoothed ≈ fwd_conf atol=0.05   # Within 5% — same pattern both ways
+
+    println("  ✓ [38] Bidirectional: symmetric pattern smoothed ($(round(smoothed, digits=3))) ≈ forward ($(round(fwd_conf, digits=3)))")
+end
+
+# ==============================================================================
+# 39. BIDIRECTIONAL CHEAP SCAN — error handling (empty inputs)
+# ==============================================================================
+@testset "BidirectionalScan - Error cases propagate" begin
+    # GRUG: Empty target and empty pattern must both throw. No silent failures!
+
+    valid_sig   = [0.1, 0.2, 0.3, 0.4, 0.5]
+    pattern_sig = [0.3, 0.4]
+
+    @test_throws ErrorException _bidirectional_cheap_scan(Float64[], pattern_sig)
+    @test_throws ErrorException _bidirectional_cheap_scan(valid_sig, Float64[])
+
+    println("  ✓ [39] Bidirectional error cases: empty inputs throw, no silent failures")
+end
+
+# ==============================================================================
+# 40. BIDIRECTIONAL SCAN — effective scan mode tier 1 routes through bidirectional
+# ==============================================================================
+@testset "BidirectionalScan - Tier-1 nodes use bidirectional in scan_and_expand" begin
+    # GRUG: End-to-end verification that tier-1 nodes (signal length ≤ 3) in
+    # scan_and_expand go through bidirectional cheap scan.
+    # We can't call scan_and_expand directly easily here, so we verify by
+    # confirming _effective_scan_mode returns 1 for short signals AND that
+    # _bidirectional_cheap_scan works on the canonical 2-element case.
+
+    short_sig = [0.5, 0.5]  # 2 elements -> tier 1 regardless of input complexity
+    @test _effective_scan_mode(3, short_sig) == 1  # Even mode-3 input caps at 1
+    @test _effective_scan_mode(2, short_sig) == 1
+    @test _effective_scan_mode(1, short_sig) == 1
+
+    # GRUG: Verify bidirectional can handle 2-element patterns (the minimal tier-1 case)
+    target_sig = [0.1, 0.2, 0.8, 0.9, 0.3, 0.4]
+    _, conf = _bidirectional_cheap_scan(target_sig, short_sig; threshold=0.1)
+    @test isfinite(conf)
+    @test conf >= 0.0
+
+    println("  ✓ [40] Tier-1 routing: mode=1 for short signals + bidirectional handles 2-element patterns")
+end
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

@@ -20,11 +20,13 @@ end
 
 Three scan modes with increasing precision:
 
-- `cheap_scan(input, pattern)` — strided sliding window, O(n/stride) 
+- `cheap_scan(input, pattern)` — strided sliding window, O(n/stride)
 - `medium_scan(input, pattern)` — every-index sliding window, O(n)
 - `high_res_scan(input, pattern)` — two-pass: candidate zone detection + strict variance-penalized validation
 
 All return `(best_index, confidence)` or throw `PatternNotFoundError`.
+
+- `_bidirectional_cheap_scan(target, pattern; threshold)` — tier-1 wrapper: runs `cheap_scan` **forward AND reverse** (reversed pattern signal), returns smoothed confidence = average of both contributions. Miss contribution = `threshold - 0.01` (not zero, to avoid harshly penalizing partial reversal). If both directions miss → `PatternNotFoundError`. Corrects order-sensitivity of `words_to_signal` encoding for short patterns.
 
 ### Selective Scan Tier Selection
 
@@ -32,11 +34,11 @@ Scan tier is determined by two factors:
 
 1. **Input complexity** (`screen_input_complexity`) — signal length and triple count set the base tier (1=cheap, 2=medium, 3=high-res)
 2. **Node pattern complexity** (`_effective_scan_mode`) — per-node downgrade based on the node's own signal length. Simple patterns don't justify expensive scanning:
-   - ≤3 tokens → capped at tier 1 (cheap only)
-   - 4–8 tokens → capped at tier 2 (medium max)
+   - ≤3 tokens → capped at tier 1 (**bidirectional** `_bidirectional_cheap_scan`)
+   - 4–8 tokens → capped at tier 2 (medium scan, single direction)
    - \>8 tokens → no cap (full tier from input complexity)
 
-The tier can only go **down**, never up. If the input demands cheap scan, the node can't push it to high-res. But if the input demands high-res, a tiny node pattern drops it back to cheap. This prevents wasting O(n²) work on patterns too small for variance penalties to be meaningful.
+The tier can only go **down**, never up. If the input demands cheap scan, the node can't push it to high-res. But if the input demands high-res, a tiny node pattern drops it back to cheap. Tier-1 nodes additionally get bidirectional smoothing to resolve the order-sensitivity of `words_to_signal` encoding — "dog bites man" and "man bites dog" both match regardless of which order the connector pattern was encoded.
 
 ## Image SDF (`ImageSDF`)
 

@@ -1317,9 +1317,15 @@ If the input demands cheap_scan (mode=1), the node can't push it to high_res.
 But if the input demands high_res (mode=3), a tiny node pattern drops it back.
 
 Pattern complexity thresholds:
-  - signal length ≤ 3 tokens  → mode capped at 1 (cheap scan only)
+  - signal length ≤ 3 tokens  → mode capped at 1 (cheap scan only, BIDIRECTIONAL)
   - signal length ≤ 8 tokens  → mode capped at 2 (medium scan max)
   - signal length > 8 tokens  → no cap (full tier from input complexity)
+
+BIDIRECTIONAL AT TIER 1: When effective_mode == 1, scan_and_expand uses
+_bidirectional_cheap_scan() instead of plain cheap_scan(). Forward + reverse
+passes are both run and confidence is smoothed (averaged). This catches
+order-reversed matches that forward-only scanning would miss — "man bites dog"
+aligns with "dog bites man" when the reverse pass runs.
 
 Why: Short patterns have so few signal values that the sliding window
 variance penalty in high_res_scan is numerically meaningless, and the
@@ -1350,6 +1356,126 @@ function _effective_scan_mode(base_mode::Int, node_signal::Vector{Float64})::Int
     # GRUG: Complex patterns → full tier from input complexity. These
     # patterns have enough signal to benefit from high-res scanning.
     return base_mode
+end
+
+# ==============================================================================
+# BIDIRECTIONAL CHEAP SCAN
+# ==============================================================================
+
+"""
+_bidirectional_cheap_scan(
+    target::Vector{Float64},
+    pattern::Vector{Float64};
+    threshold::Real = 0.3
+)::Tuple{Int, Float64}
+
+GRUG: Bidirectional confidence smoothing for tier-1 (cheap scan) patterns.
+
+The signal encoding of words_to_signal is ORDER-SENSITIVE: "dog bites man" and
+"man bites dog" produce different signal vectors. A pure forward cheap_scan misses
+cases where token overlap is high but word order is reversed — the sliding window
+never aligns the reversed pattern against the target.
+
+BIDIRECTIONAL FIX:
+  1. Forward scan:  cheap_scan(target, pattern)         — normal left-to-right
+  2. Reverse scan:  cheap_scan(target, reverse(pattern)) — reversed pattern signal
+
+SMOOTHING FORMULA:
+  Both succeed  → smoothed = (forward_conf + reverse_conf) / 2
+                  Neither direction dominates. True bidirectional match averages out.
+  One succeeds  → smoothed = (hit_conf + threshold - ε) / 2
+                  One direction found a match; the other didn't meet threshold.
+                  We use (threshold - ε) as the miss contribution — not zero
+                  (which would harshly punish partial reversal) and not threshold
+                  (which would inflate). This gives a moderate signal, not a spike.
+  Both fail     → rethrow PatternNotFoundError from forward direction.
+                  No match either way. Consistent with single-direction behavior.
+
+WHY AVERAGING WORKS:
+  High overlap in both directions → high smooth score (true bidirectional match)
+  High in one direction only      → moderate score (partial/lucky alignment)
+  Low in both                     → below threshold, PatternNotFoundError propagates
+
+Called only for effective_mode == 1 (cheap scan tier, simple patterns ≤ 3 signal
+elements). Medium and high-res tiers don't need this — they already scan every
+index exhaustively, so order sensitivity is minimal at longer pattern lengths.
+
+ERRORS: propagates PatternNotFoundError if both directions miss. NO SILENT FAILURES.
+"""
+function _bidirectional_cheap_scan(
+    target::Vector{Float64},
+    pattern::Vector{Float64};
+    threshold::Real = 0.3
+)::Tuple{Int, Float64}
+    if isempty(target)
+        # GRUG: Empty target is a scanner crash waiting to happen. Scream now!
+        error("!!! FATAL: _bidirectional_cheap_scan got empty target signal! !!!")
+    end
+    if isempty(pattern)
+        # GRUG: Empty pattern means there's nothing to match. No silent failure!
+        error("!!! FATAL: _bidirectional_cheap_scan got empty pattern signal! !!!")
+    end
+
+    # GRUG: Threshold floor — just below threshold so a miss contributes a near-zero
+    # but honest value to the average, rather than harshly dragging it down to 0.
+    # This avoids the asymmetry where one direction missing tanks an otherwise good score.
+    miss_contribution = max(0.0, Float64(threshold) - 0.01)
+
+    # GRUG: Forward scan — standard left-to-right window alignment.
+    forward_idx  = 0
+    forward_conf = miss_contribution
+    forward_ok   = false
+    try
+        forward_idx, forward_conf = cheap_scan(target, pattern; threshold=threshold)
+        forward_ok = true
+    catch e
+        if e isa PatternNotFoundError
+            # GRUG: Forward direction missed. Not fatal — reverse may still hit.
+            forward_conf = miss_contribution
+        elseif e isa PatternScanError
+            # GRUG: FATAL scanner logic error. Always rethrow. NO SILENT FAILURE!
+            rethrow(e)
+        else
+            error("!!! FATAL: _bidirectional_cheap_scan forward pass got unknown error: $e !!!")
+        end
+    end
+
+    # GRUG: Reverse scan — reverse the pattern signal so "man bites dog" encoded
+    # in reverse becomes equivalent to "dog bites man" forward.
+    reverse_conf = miss_contribution
+    reverse_ok   = false
+    rev_pattern  = reverse(pattern)  # GRUG: New vector, original untouched
+    try
+        _, reverse_conf = cheap_scan(target, rev_pattern; threshold=threshold)
+        reverse_ok = true
+    catch e
+        if e isa PatternNotFoundError
+            # GRUG: Reverse direction also missed. Will check both-fail case below.
+            reverse_conf = miss_contribution
+        elseif e isa PatternScanError
+            rethrow(e)
+        else
+            error("!!! FATAL: _bidirectional_cheap_scan reverse pass got unknown error: $e !!!")
+        end
+    end
+
+    # GRUG: Both directions missed — pattern truly not found. Propagate forward error
+    # so scan_and_expand gets a PatternNotFoundError and skips this node.
+    if !forward_ok && !reverse_ok
+        throw(PatternNotFoundError(
+            "Bidirectional cheap scan: pattern not found in either direction.",
+            miss_contribution
+        ))
+    end
+
+    # GRUG: Smoothed confidence = average of forward and reverse contributions.
+    # If only one succeeded, the miss_contribution softens (not zeroes) the average.
+    smoothed_conf = (forward_conf + reverse_conf) / 2.0
+
+    # GRUG: Return best alignment index (forward preferred; reverse is orientation-flipped
+    # so its index doesn't map back to the original signal cleanly).
+    best_idx = forward_ok ? forward_idx : 1
+    return (best_idx, smoothed_conf)
 end
 
 # ==============================================================================
@@ -1554,7 +1680,11 @@ function scan_specimens(input_text::String)::Vector{Tuple{String, Float64, Bool,
                 effective_mode = _effective_scan_mode(scan_mode, node.signal)
 
                 if effective_mode == 1
-                    _, token_conf = cheap_scan(target_signal, node.signal; threshold=0.3)
+                    # GRUG: BIDIRECTIONAL CHEAP SCAN — simple patterns (≤3 signal elements)
+                    # run forward AND reverse. "dog bites man" vs "man bites dog" both align.
+                    # Confidence is smoothed: average of forward and reverse contributions.
+                    # If both miss → PatternNotFoundError propagates normally (skip node).
+                    _, token_conf = _bidirectional_cheap_scan(target_signal, node.signal; threshold=0.3)
                 elseif effective_mode == 2
                     _, token_conf = medium_scan(target_signal, node.signal; threshold=0.4)
                 else
@@ -1562,7 +1692,7 @@ function scan_specimens(input_text::String)::Vector{Tuple{String, Float64, Bool,
                 end
             catch e
                 if e isa PatternNotFoundError
-                    # Normal logic: Scanner says no match. Skip!
+                    # Normal logic: Scanner says no match in any direction. Skip!
                     continue
                 elseif e isa PatternScanError
                     # FATAL LOGIC ERROR. NO SILENT FAILURE! Scream loud!
