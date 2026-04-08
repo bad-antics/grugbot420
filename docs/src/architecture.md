@@ -17,6 +17,7 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 ├─────────────────────────────────────────────────┤
 │           Engine (Node Voting Core)             │
 │  ActionTonePredictor │ SemanticVerbs            │
+│  AttachmentRelay (Relational Fire System)       │
 ├──────────────────────┴──────────────────────────┤
 │  PatternScanner │ ImageSDF │ EyeSystem          │
 ├─────────────────┴──────────┴────────────────────┤
@@ -28,9 +29,22 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 
 1. **Creation** — Nodes are planted via `/grow` with a pattern, action packet, and optional JSON data
 2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching
-3. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
-4. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override
-5. **Decay** — Unused nodes lose strength over time; grave nodes may be recycled by PhagyMode
+3. **Attachment Relay** — Nodes that fired are checked for attachments; attached nodes do a strength-biased coinflip and winners join the vote pool (Pass 3 of `scan_and_expand`)
+4. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
+5. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override
+6. **Decay** — Unused nodes lose strength over time; grave nodes may be recycled by PhagyMode
+
+## Attachment Relay (Relational Fire)
+
+The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After the primary scan (Pass 1) and lobe cascade (Pass 2), the engine iterates every node in the expanded set and checks for attachments via `ATTACHMENT_MAP`. Each attached node does a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`). Winners enter the expanded vote set with pattern-derived confidence. The relay has its own independent active cap sample (`rand(600:1800)`) to respect the biological attention bottleneck.
+
+Key properties:
+- Max 4 attachments per target node
+- Coinflip-gated: strong attachments fire more often but weak ones still have a 20% floor
+- Confidence = `max(0.1, token_overlap(attached_pattern, target_pattern) + strength_bonus)`
+- Deduplication: no node appears twice in the expanded set
+- Fired attachments get a `bump_strength!` call (they earned it)
+- Fully serialized in specimen save/load (section 14 / 4.14)
 
 ## File Reference
 

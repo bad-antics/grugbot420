@@ -48,12 +48,22 @@ Launch GrugBot420 with `julia Main.jl` (standalone) or `GrugBot420.main()` (from
 | `/negativeThesaurus add <word>` | Inhibit a word from input scanning |
 | `/negativeThesaurus list` | Show all inhibited words |
 
+## Relational Fire (Node Attachments)
+
+| Command | Description |
+|---------|-------------|
+| `/nodeAttach <target> <id1> <pattern1> [...]` | Attach up to 4 nodes to a target with firing patterns. Quoted multi-word patterns supported. |
+| `/nodeDetach <target> <id>` | Remove a specific attachment from a target node |
+| `/attachments` | Show the full attachment map (all targets and their attached nodes) |
+
+When the target node fires during `scan_and_expand`, each attached node does a strength-biased coinflip. Winners enter the vote pool with confidence derived from token overlap between the attachment's pattern and the target node's pattern. The active cap (biological attention bottleneck) is respected. See the [Relational Fire System](../README.md#relational-fire-system-nodeattach) section in the README for full details.
+
 ## Specimen Persistence
 
 | Command | Description |
 |---------|-------------|
-| `/saveSpecimen <path>` | Freeze entire cave state to gzip JSON |
-| `/loadSpecimen <path>` | Restore cave state from specimen file |
+| `/saveSpecimen <path>` | Freeze entire cave state to gzip JSON (includes attachments) |
+| `/loadSpecimen <path>` | Restore cave state from specimen file (includes attachments) |
 
 ## Help
 

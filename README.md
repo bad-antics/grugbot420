@@ -109,11 +109,19 @@ The engine seeds three boot nodes, prints a startup banner, and drops you at the
 | `/negativeThesaurus check <word>` | Quick check if a word is currently inhibited. |
 | `/negativeThesaurus flush` | Clear all inhibitions at once. |
 
+### Relational Fire (Node Attachments)
+
+| Command | What it does |
+|---|---|
+| `/nodeAttach <target> <id1> <pattern1> [<id2> <pattern2> ...]` | Attach up to 4 nodes to a target node. When the target fires during `scan_and_expand`, each attached node does a strength-biased coinflip to decide if it should fire too. Patterns support quoted multi-word strings (e.g. `"deep learning"`). |
+| `/nodeDetach <target> <attach_id>` | Remove a specific attachment from a target node. |
+| `/attachments` | Show the full attachment map — every target and its attached nodes with patterns and slot usage. |
+
 ### Specimen Persistence (Long-Term Storage)
 
 | Command | What it does |
 |---|---|
-| `/saveSpecimen <filepath>` | Freeze the entire cave state to a gzip-compressed JSON file. Every node, lobe, rule, message, verb, thesaurus entry, inhibition, arousal level — everything. |
+| `/saveSpecimen <filepath>` | Freeze the entire cave state to a gzip-compressed JSON file. Every node, lobe, rule, message, verb, thesaurus entry, inhibition, attachment, arousal level — everything. |
 | `/loadSpecimen <filepath>` | Restore the entire cave state from a previously saved specimen file. **Destructive** — current state is wiped and replaced (full brain transplant). |
 
 ### Help
@@ -202,10 +210,11 @@ The file is validated before any state is wiped. If validation fails, zero chang
 | 11 | **arousal** | EyeSystem arousal state (level, decay_rate, baseline) |
 | 12 | **id_counters** | NODE ID_COUNTER and MSG_ID_COUNTER atomic values |
 | 13 | **brainstem** | BrainStem dispatch count and propagation history |
+| 14 | **attachments** | ATTACHMENT_MAP — target→attached node mappings with patterns and pre-baked signal vectors |
 
 ### Restore order
 
-`id_counters` → `verb_registry` → `thesaurus_seeds` → `lobes` → `lobe_tables` → `nodes` → `node_to_lobe_idx` → `hopfield_cache` → `rules` → `inhibitions` → `message_history` → `arousal` → `brainstem`
+`id_counters` → `verb_registry` → `thesaurus_seeds` → `lobes` → `lobe_tables` → `nodes` → `node_to_lobe_idx` → `hopfield_cache` → `rules` → `inhibitions` → `message_history` → `arousal` → `brainstem` → `attachments`
 
 This ensures upstream entities exist before downstream references (e.g., lobes exist before nodes reference them).
 
@@ -215,6 +224,60 @@ This ensures upstream entities exist before downstream references (e.g., lobes e
 - **Compression:** gzip (system `gzip`/`gunzip` via pipeline — no extra Julia packages)
 - **Content:** JSON with pretty-print indentation (human-readable when decompressed)
 - **Metadata:** `_meta` section records version, timestamp, and format identifier
+
+---
+
+## Relational Fire System (`/nodeAttach`)
+
+The relational fire system lets you wire nodes into explicit firing chains. When a target node fires during `scan_and_expand`, its attached nodes each do a strength-biased coinflip to decide whether they should fire too. Think of it as user-defined relay circuitry overlaid on top of the stochastic scan.
+
+### Attaching Nodes
+
+```
+/nodeAttach node_0 node_1 "machine learning" node_2 "gradient descent"
+```
+
+This attaches `node_1` and `node_2` to `node_0`. When `node_0` fires:
+
+1. Each attachment does a **strength-biased coinflip**: `scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`
+2. Winners that pass the coinflip enter the expanded vote set with a **pattern-derived confidence**:
+   - Base confidence = token overlap similarity between the attachment's pattern and the target node's pattern
+   - Strength bonus = `(attachment_strength / STRENGTH_CAP) * 0.5`
+   - Final confidence = `max(0.1, base + strength_bonus)` — floor of 0.1 so attachments always have *some* voice
+3. The **active cap** (biological attention bottleneck, `rand(600:1800)`) is respected — if the relay pass hits the cap, remaining attachments are skipped
+
+### Constraints & Validation
+
+- **Max 4 attachments** per target node (hard cap)
+- Target and attachment nodes must exist on the map and must not be graves
+- A node cannot attach to itself
+- Duplicate attachments are rejected
+- Patterns support quoted multi-word strings
+- Every error is explicit — no silent failures
+
+### Detaching
+
+```
+/nodeDetach node_0 node_1
+```
+
+Removes `node_1` from `node_0`'s attachment list. If that was the last attachment, the target's entry is cleaned up entirely.
+
+### Viewing Attachments
+
+```
+/attachments
+```
+
+Prints every target and its attached nodes with patterns, signal vector lengths, and slot usage (`N/4`).
+
+### Pipeline Integration (Pass 3)
+
+The attachment relay runs as **Pass 3** in `scan_and_expand()`, after the primary scan (Pass 1) and lobe cascade (Pass 2). It iterates every node in the expanded set, checks for attachments, and fires winners into the vote pool. Deduplication ensures no node appears twice. The relay has its own independent `active_cap` sample.
+
+### Specimen Persistence
+
+Attachments are fully serialized in `/saveSpecimen` (section 14) and restored in `/loadSpecimen` (section 4.14). Each attachment entry stores `target_id`, `node_id`, `pattern`, and the pre-baked `signal` vector. On load, if the signal vector is missing (backward compatibility), it is re-baked from the pattern via `words_to_signal`.
 
 ---
 

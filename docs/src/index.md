@@ -17,6 +17,7 @@ GrugBot420 models cognition through competing populations of pattern nodes — n
 - **Idle Gossip (ChatterMode)** — Ephemeral node clones exchange patterns during quiet periods (1000+ node gate)
 - **Self-Healing (PhagyMode)** — Six maintenance automata for orphan pruning, cache validation, and more
 - **Specimen Persistence** — Full cave state freeze/restore via gzip-compressed JSON snapshots
+- **Relational Fire (Node Attachments)** — User-defined relay circuitry: attach up to 4 nodes to any target; when the target fires, attachments coinflip to join the vote pool with pattern-derived confidence
 
 ## Installation
 

@@ -861,6 +861,91 @@ time, share it with others, or restore it later on a different machine.</p>
 &#9562;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9565;</code></pre>
 
 <!-- ================================================================ -->
+<h2 id="relational-fire">16.5 Relational Fire System <span class="new-badge">v7.2</span></h2>
+
+<p>
+The relational fire system introduces <strong>user-defined relay circuitry</strong> into the node engine.
+Where drop tables provide implicit co-activation (neighbors fire when the primary fires), and lobe
+cascades provide cross-domain propagation (decayed signals hop between connected lobes), the
+attachment system provides <em>explicit, targeted, pattern-carrying relay links</em> between specific nodes.
+</p>
+
+<h3>Architecture</h3>
+<p>
+The system is built on four primitives stored in <code>engine.jl</code>:
+</p>
+<ul>
+    <li><code>AttachedNode</code> &mdash; immutable struct: <code>node_id::String</code>, <code>pattern::String</code>, <code>signal::Vector{Float64}</code> (pre-baked via <code>words_to_signal</code>)</li>
+    <li><code>ATTACHMENT_MAP</code> &mdash; <code>Dict{String, Vector{AttachedNode}}</code> mapping target node IDs to their attached nodes</li>
+    <li><code>ATTACHMENT_LOCK</code> &mdash; <code>ReentrantLock</code> for thread-safe access</li>
+    <li><code>MAX_ATTACHMENTS = 4</code> &mdash; hard cap per target node</li>
+</ul>
+
+<h3>Attachment Lifecycle</h3>
+<p>
+<strong>Attach:</strong> <code>/nodeAttach <target> <id1> <pattern1> [<id2> <pattern2> ...]</code>
+</p>
+<p>
+Validation is exhaustive and non-silent: empty arguments, node existence, grave status, self-attach
+prevention, max cap enforcement, and duplicate rejection all produce explicit error messages. The
+pattern is pre-baked into a signal vector at attach time so no allocation occurs during the hot scan path.
+</p>
+<p>
+<strong>Detach:</strong> <code>/nodeDetach <target> <attach_id></code> removes a specific attachment. If that was
+the last attachment on the target, the entry is cleaned up entirely.
+</p>
+<p>
+<strong>Inspect:</strong> <code>/attachments</code> prints every target and its attached nodes with patterns, signal
+vector lengths, and slot usage (N/4).
+</p>
+
+<h3>Firing Mechanics (Pass 3 of scan_and_expand)</h3>
+<p>
+The attachment relay runs as <strong>Pass 3</strong> in the <code>scan_and_expand()</code> pipeline, after the
+primary scan (Pass 1) and lobe cascade (Pass 2). For every node in the expanded set, the engine
+checks <code>ATTACHMENT_MAP</code> for attached nodes. Each attachment goes through a three-stage gate:
+</p>
+<ol>
+    <li><strong>Active cap gate:</strong> If the relay has already hit its independent cap (<code>rand(600:1800)</code>),
+        remaining attachments are skipped. This respects the biological attention bottleneck.</li>
+    <li><strong>Alive check:</strong> If the attached node has been deleted or graved since attachment, it is
+        silently skipped (stale attachment, non-fatal).</li>
+    <li><strong>Strength-biased coinflip:</strong> <code>scan_prob = 0.20 + (strength / STRENGTH_CAP) &times; 0.70</code>.
+        Strong attachments fire more often. Weak ones still have a 20% floor.</li>
+</ol>
+<p>
+Winners that pass all three gates enter the vote pool with a <strong>pattern-derived confidence</strong>:
+</p>
+<div class="math-section">
+    <code>base_conf = token_overlap_similarity(attachment_pattern, target_node_pattern)</code><br>
+    <code>strength_bonus = attachment_strength / STRENGTH_CAP &times; 0.5</code><br>
+    <code>confidence = max(0.1, base_conf + strength_bonus)</code>
+</div>
+<p>
+The confidence floor of 0.1 ensures that attached nodes always have <em>some</em> voice in the quorum,
+even if the pattern overlap is minimal. Fired attachments receive a <code>bump_strength!</code> call &mdash;
+they earned usage credit. Deduplication ensures no node appears twice in the expanded set.
+</p>
+
+<h3>Specimen Persistence</h3>
+<p>
+Attachments are fully serialized as section 14 of <code>/saveSpecimen</code> and restored as section 4.14
+of <code>/loadSpecimen</code>. Each entry stores <code>target_id</code>, <code>node_id</code>,
+<code>pattern</code>, and the pre-baked <code>signal</code> vector. On load, if the signal vector is missing
+(backward compatibility with older specimens), it is re-baked from the pattern via <code>words_to_signal</code>.
+</p>
+
+<h3>Design Rationale</h3>
+<p>
+The attachment system is the explicit counterpart to the engine's implicit co-activation mechanisms.
+Drop tables discover neighbors through seeding; lobe cascades propagate through connectivity. Attachments
+let the architect declare: <em>"when this node fires, give these specific nodes a chance to contribute
+with this specific framing."</em> The coinflip gate ensures that explicit wiring does not bypass the
+stochastic selection pressure that keeps the system honest. The biological parallel is pre-wired axonal
+pathways &mdash; genetically encoded relay circuits that still require synaptic gating to fire.
+</p>
+
+<!-- ================================================================ -->
 <h2 id="math">17. Formal Mathematics</h2>
 
 <h3>Strength Dynamics</h3>
@@ -1062,10 +1147,18 @@ The signal is not in the wire. Only the computation is. And the computation was 
     <tr><td><code>/negativeThesaurus flush</code></td><td>Clear all inhibitions</td></tr>
 </table>
 
+<h3>Relational Fire (Node Attachments) <span class="new-badge">v7.2</span></h3>
+<table>
+    <tr><th>Command</th><th>Description</th></tr>
+    <tr><td><code>/nodeAttach <target> <id1> <pat1> [...]</code></td><td>Attach up to 4 nodes to target with user-defined firing patterns. Quoted multi-word patterns supported.</td></tr>
+    <tr><td><code>/nodeDetach <target> <id></code></td><td>Remove a specific attachment from a target node.</td></tr>
+    <tr><td><code>/attachments</code></td><td>Show the full attachment map &mdash; all targets and their attached nodes with patterns and slot usage.</td></tr>
+</table>
+
 <h3>Specimen Persistence <span class="new-badge">v7</span></h3>
 <table>
     <tr><th>Command</th><th>Description</th></tr>
-    <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 13 state categories.</td></tr>
+    <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 14 state categories (including attachments).</td></tr>
     <tr><td><code>/loadSpecimen <filepath></code></td><td>Restore full cave state from specimen file. Destructive: wipes current state first. Validates before wiping.</td></tr>
 </table>
 
@@ -1150,7 +1243,16 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
 <!-- ================================================================ -->
 <div style="margin-top: 60px; border-top: 2px solid #333; padding-top: 30px;">
     <h2 style="color: #00ff88; border: none; padding: 0;">Changelog</h2>
-    <h4>v7.1 (Current)</h4>
+    <h4>v7.2 (Current)</h4>
+    <ul>
+        <li>Relational Fire System: <code>/nodeAttach</code>, <code>/nodeDetach</code>, <code>/attachments</code> &mdash; user-defined relay circuitry with strength-biased coinflip gating</li>
+        <li>Pass 3 in <code>scan_and_expand()</code>: attachment relay with independent active cap, pattern-derived confidence, deduplication</li>
+        <li>Specimen persistence extended to 14 state categories (section 14: attachments)</li>
+        <li><code>AttachedNode</code> struct with pre-baked signal vectors for zero-allocation hot-path firing</li>
+        <li>Full validation on attach/detach: existence, grave, self-attach, max cap, duplicate checks &mdash; no silent failures</li>
+        <li>Updated BOOT_MSG, HELP_MSG, <code>/nodes</code> output, and all documentation</li>
+    </ul>
+    <h4>v7.1</h4>
     <ul>
         <li>ChatterMode v7.1: idle timer slowed from 30s to 120s &plusmn;30s (shared timer for both chatter and phagy)</li>
         <li>Population gate: both chatter AND phagy only fire at 1000+ alive non-image nodes. New specimens skip all idle actions entirely.</li>
@@ -1190,7 +1292,7 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
 </div>
 
 <div class="signature">
-    <p>GrugBot Neuromorphic Engine v7 &mdash; Technical Whitepaper</p>
+    <p>GrugBot Neuromorphic Engine v7.2 &mdash; Technical Whitepaper</p>
     <p>🦴 "Cave brain think different. That is why cave brain strong." &mdash; Grug</p>
 </div>
 

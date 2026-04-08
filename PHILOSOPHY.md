@@ -227,6 +227,24 @@ Software and hardware, the principle is identical: **pre-alignment eliminates tr
 
 ---
 
+## Relational Fire: User-Defined Relay Circuitry
+
+The attachment system is the most explicit expression of the alignment principle applied to node topology. Every other connection in GrugBot is emergent — drop tables are seeded at creation, neighbor links form through co-activation, lobe connections propagate decayed signals laterally. These are structural relationships that the system discovers or that the architect wires at design time.
+
+Relational fire is different. It is the user saying: *"When this node fires, I want these specific nodes to have a chance to fire too, and here is the pattern that defines their contribution."*
+
+This is not a hard-wired pipeline. The attachment does not guarantee firing. Each attached node still faces the same strength-biased coinflip that every node in the system faces. A weak attachment with low strength has a 20% chance. A strong attachment that has been bumped through repeated use has up to 90%. The coinflip is the gate. The user defines the topology; the stochastic system decides whether the topology activates on any given cycle.
+
+The pattern associated with each attachment is not decorative. It determines the attached node's confidence when it enters the vote pool. Confidence is computed from the token overlap between the attachment's pattern and the target node's pattern, plus a strength bonus. A well-chosen pattern — one that semantically overlaps with the target's domain — produces high confidence. A poorly chosen pattern produces low confidence. The system does not correct bad attachments. It faithfully computes the alignment score and lets the quorum decide whether that voice matters.
+
+This creates a form of **explicit relational reasoning** that complements the implicit relational reasoning already present in the engine. The implicit system discovers relationships through co-activation patterns, strength accumulation, and lobe cascade propagation. The explicit system lets the user encode known relationships directly — "when the chemistry node fires, give the thermodynamics node a chance to contribute with this specific framing." Both systems feed into the same vote pool. Both are gated by the same coinflip. Both respect the same active cap. The difference is intent: one is discovered, the other is declared.
+
+The biological parallel is axonal wiring. Neurons form connections through use (Hebbian learning), but they also have genetically pre-wired pathways that exist from birth — sensory relay circuits, reflex arcs, cranial nerve connections. These pre-wired pathways do not bypass the synaptic gate. They still require sufficient neurotransmitter release to fire. But they ensure that certain functionally important connections exist before any learning has occurred. Relational fire is GrugBot's version of pre-wired circuitry: explicit topology that still respects the stochastic gate.
+
+The attachment map is fully persistent. It serializes into specimen files alongside every other state category. A specimen with carefully tuned attachments is a cognitive artifact that encodes not just what the system knows (nodes, patterns, strengths) but how the architect intended knowledge to propagate (relay topology). Two specimens with identical nodes but different attachment maps will behave differently under the same input. The attachment map is part of the specimen's DNA.
+
+---
+
 ## Summary
 
 | Modern LLM | GrugBot |
