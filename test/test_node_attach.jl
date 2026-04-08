@@ -1188,6 +1188,53 @@ end
 end
 
 # ==============================================================================
+# 42. JITGPU EVERYWHERE — verify JITGPU and CPU reference produce equivalent SDFParams
+# ==============================================================================
+@testset "JITGPU-Everywhere - JITGPU matches CPU reference path" begin
+    # GRUG: All production image paths now use JITGPU. This test verifies
+    # the JITGPU output matches the CPU reference (image_to_sdf_params) within
+    # float tolerance. If this holds, the swap from CPU→JITGPU is safe everywhere.
+
+    # 4x4 RGB test image (48 bytes)
+    test_img = UInt8[]
+    for row in 1:4, col in 1:4
+        push!(test_img, UInt8(row * 60))   # R
+        push!(test_img, UInt8(col * 60))   # G
+        push!(test_img, UInt8(128))        # B
+    end
+
+    gpu_sdf = JITGPU(test_img; width=4, height=4)
+    cpu_sdf = image_to_sdf_params(test_img, 4, 4)
+
+    # GRUG: Both must return valid SDFParams with same array lengths
+    @test length(gpu_sdf.brightnessArray) == length(cpu_sdf.brightnessArray)
+    @test length(gpu_sdf.colorArray) == length(cpu_sdf.colorArray)
+    @test length(gpu_sdf.xArray) == length(cpu_sdf.xArray)
+    @test length(gpu_sdf.yArray) == length(cpu_sdf.yArray)
+    @test gpu_sdf.width == cpu_sdf.width == 4
+    @test gpu_sdf.height == cpu_sdf.height == 4
+
+    # GRUG: Values must match within float32→float64 tolerance.
+    # JITGPU uses Float32 kernels, CPU path uses Float64. Allow small epsilon.
+    for (g, c) in zip(gpu_sdf.brightnessArray, cpu_sdf.brightnessArray)
+        @test abs(g - c) < 0.02  # tanh(3*grad) amplifies small float diffs
+    end
+    for (g, c) in zip(gpu_sdf.xArray, cpu_sdf.xArray)
+        @test abs(g - c) < 1e-5
+    end
+    for (g, c) in zip(gpu_sdf.yArray, cpu_sdf.yArray)
+        @test abs(g - c) < 1e-5
+    end
+
+    # GRUG: sdf_to_signal must produce same-length vectors from both
+    gpu_sig = sdf_to_signal(gpu_sdf; max_samples=64)
+    cpu_sig = sdf_to_signal(cpu_sdf; max_samples=64)
+    @test length(gpu_sig) == length(cpu_sig)
+
+    println("  ✓ [42] JITGPU-Everywhere: GPU and CPU SDF paths produce equivalent results")
+end
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

@@ -488,12 +488,13 @@ maybe_convert_image_input(input_text::String)::Tuple{Bool, Vector{Float64}}
 GRUG: Pre-screen input text for image binary using regex from ImageSDF.
 If image binary found:
   1. Decode image data from Base64 (or hex)
-  2. Run JIT image->SDF conversion
+  2. Run JITGPU — real GPU-accelerated nonlinear SDF conversion via KernelAbstractions.jl
   3. Apply EyeSystem visual processing (edge blur, attention, arousal cutout)
   4. Apply SDF jitter (pineal drip)
   5. Convert to flat Float64 signal
   6. Return (true, signal)
 If no image binary: return (false, Float64[])
+Throws on empty input or conversion failure — NO SILENT FAILURES.
 """
 function maybe_convert_image_input(input_text::String)::Tuple{Bool, Vector{Float64}}
     if strip(input_text) == ""
@@ -536,8 +537,10 @@ function maybe_convert_image_input(input_text::String)::Tuple{Bool, Vector{Float
         est_width   = est_side
         est_height  = max(1, n_bytes ÷ est_side)
 
-        # GRUG: Run JIT image -> SDFParams conversion
-        sdf_params  = ImageSDF.image_to_sdf_params(raw_bytes, est_width, est_height)
+        # GRUG: Run JIT GPU-accelerated image -> SDFParams conversion
+        # JITGPU dispatches real KernelAbstractions kernels: CUDA/ROC/Metal/CPU.
+        # CPU() is genuine multithreaded kernel dispatch, not a fake fallback.
+        sdf_params  = ImageSDF.JITGPU(raw_bytes; width=est_width, height=est_height)
 
         # GRUG: Apply EyeSystem visual processing (blur + attention modulation + arousal cutout)
         mod_brightness, _attn_map = EyeSystem.process_visual_input(

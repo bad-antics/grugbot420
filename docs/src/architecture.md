@@ -61,6 +61,8 @@ Image attachments use the same `AttachedNode` struct and `ATTACHMENT_MAP` as tex
 2. **`KernelAbstractions.synchronize(backend)`**: device barrier — all pixels decoded before any gradient reads its neighbors
 3. **Pass 2 (`_sdf_gradient_kernel!`)**: central-difference gradient → `tanh(3 × grad_mag)` nonlinear SDF activation — edges produce high activation, uniform regions suppress to near zero
 
+**All image paths use JITGPU.** Every entry point where image binary enters the system — `/mission` inline detection, `/grow` packet detection, and `/imgnodeAttach` explicit attachment — routes through `JITGPU(binary; width, height)` for nonlinear SDF conversion. The CPU reference path (`image_to_sdf_params`) is retained for tests only.
+
 Key properties:
 - Max 4 attachments per target node (text + image share the same pool)
 - Coinflip-gated: strong attachments fire more often but weak ones still have a 20% floor
