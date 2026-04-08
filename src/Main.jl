@@ -2302,7 +2302,11 @@ function run_cli()
     end
 end
 
-run_cli()
+# GRUG: Only run the CLI when executing Main.jl directly as a script,
+# not when loaded as part of the GrugBot420 package (e.g., by Documenter or Pkg.test).
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_cli()
+end
 
 # ==============================================================================
 # ARCHITECTURAL SPECIFICATION: BEHAVIORAL LAYER (MAIN.JL - UPDATED)
