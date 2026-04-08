@@ -15,7 +15,7 @@ GrugBot420 models cognition through competing populations of pattern nodes — n
 - **Visual Attention (EyeSystem)** — Edge blurring, arousal-gated cutout, attention modulation on SDF image signals
 - **Stochastic Orchestration** — Coinflip-weighted probabilistic rules injected into every response
 - **Idle Gossip (ChatterMode)** — Ephemeral node clones exchange patterns during quiet periods (1000+ node gate)
-- **Self-Healing (PhagyMode)** — Six maintenance automata for orphan pruning, cache validation, and more
+- **Self-Healing (PhagyMode)** — Seven maintenance automata for orphan pruning, cache validation, memory forensics, and more
 - **Specimen Persistence** — Full cave state freeze/restore via gzip-compressed JSON snapshots
 - **Relational Fire (Node Attachments)** — User-defined relay circuitry: attach up to 4 nodes to any target; when the target fires, attachments coinflip to join the vote pool with pattern-derived confidence
 

@@ -15,6 +15,7 @@
 #       4. CACHE VALIDATOR    - Purge stale Hopfield cache entries
 #       5. DROP TABLE COMPACT - Dedupe + trim low-probability drop_table tails
 #       6. RULE PRUNER        - Flag/remove orchestration rules that never fire
+#       7. MEMORY FORENSICS   - Coinflip: fuzzy (approximate) or metric (exact) analysis
 #
 # DESIGN RULES:
 #   - No silent failures. Every error surfaces.
@@ -27,7 +28,7 @@ module PhagyMode
 
 using Random
 
-export run_phagy!, PhagyStats, get_phagy_log, PhagyError
+export run_phagy!, PhagyStats, get_phagy_log, PhagyError, run_memory_forensics!, fuzzy_memory_forensics!, metric_memory_forensics!
 
 # ==============================================================================
 # ERROR TYPE - GRUG: NO SILENT FAILURES
@@ -508,14 +509,397 @@ function prune_dormant_rules!(rules::Vector, rules_lock::ReentrantLock)::PhagySt
 end
 
 # ==============================================================================
+# AUTOMATON 7: MEMORY FORENSICS
+# ==============================================================================
+
+# GRUG: Memory forensics examines the MESSAGE_HISTORY and NODE_MAP for health
+# indicators. Coinflip selects between FUZZY (approximate/heuristic) and METRIC
+# (exact measurement) analysis. Both modes return a ForensicsReport inside
+# PhagyStats.notes.
+
+# ── FORENSICS CONSTANTS ──────────────────────────────────────────────────────
+
+# GRUG: Thresholds for flagging anomalies in memory health.
+const FORENSICS_STALE_MSG_RATIO    = 0.90  # GRUG: If >90% of messages come from same role, flag imbalance
+const FORENSICS_DEAD_REF_THRESHOLD = 0.10  # GRUG: If >10% of message-referenced node IDs are dead, flag decay
+const FORENSICS_PATTERN_ENTROPY_LO = 0.15  # GRUG: Below this = low diversity (fuzzy mode heuristic)
+const FORENSICS_STRENGTH_SKEW_MAX  = 0.80  # GRUG: If >80% of alive nodes share same strength band, flag monoculture
+
+"""
+run_memory_forensics!(
+    node_map, node_lock, message_history, history_lock
+)::PhagyStats
+
+GRUG: MEMORY FORENSICS DISPATCHER. Flips a coin to decide between:
+  - HEADS → fuzzy_memory_forensics!  (approximate / heuristic analysis)
+  - TAILS → metric_memory_forensics! (exact / measurement-based analysis)
+
+Both modes examine MESSAGE_HISTORY and NODE_MAP for anomalies.
+Neither mode mutates state — forensics is read-only observation.
+Returns PhagyStats with the forensics report in the notes field.
+"""
+function run_memory_forensics!(
+    node_map        ::Dict,
+    node_lock       ::ReentrantLock,
+    message_history ::Vector,
+    history_lock    ::ReentrantLock
+)::PhagyStats
+    # GRUG: Validate inputs — no silent failures
+    if !isa(node_lock, ReentrantLock)
+        throw(PhagyError("!!! FATAL: run_memory_forensics! got invalid node_lock! !!!"))
+    end
+    if !isa(history_lock, ReentrantLock)
+        throw(PhagyError("!!! FATAL: run_memory_forensics! got invalid history_lock! !!!"))
+    end
+
+    # GRUG: Coinflip — heads=fuzzy, tails=metric
+    coin = rand(Bool)
+    mode = coin ? "FUZZY" : "METRIC"
+    println("[PHAGY:FORENSICS] 🔬  Memory forensics starting. Mode: $mode (coin=$(coin ? "heads" : "tails"))")
+
+    stats = try
+        if coin
+            fuzzy_memory_forensics!(node_map, node_lock, message_history, history_lock)
+        else
+            metric_memory_forensics!(node_map, node_lock, message_history, history_lock)
+        end
+    catch e
+        println("[PHAGY:FORENSICS] !!! ERROR in $mode forensics: $e !!!")
+        rethrow(e)
+    end
+
+    return stats
+end
+
+"""
+fuzzy_memory_forensics!(node_map, node_lock, message_history, history_lock)::PhagyStats
+
+GRUG: APPROXIMATE / HEURISTIC MEMORY ANALYSIS.
+Uses sampling and estimation rather than full enumeration.
+Checks:
+  1. Role distribution balance (approximate — samples up to 500 messages)
+  2. Pattern diversity estimate (hash-based approximate entropy)
+  3. Strength distribution shape (sampled histogram)
+  4. Stale attachment detection (spot-check for dead references)
+  5. Memory echo detection (repeated message content, sampled)
+
+This mode is FAST but APPROXIMATE. Good for large caves where full
+enumeration is expensive. All observations are READ-ONLY.
+"""
+function fuzzy_memory_forensics!(
+    node_map        ::Dict,
+    node_lock       ::ReentrantLock,
+    message_history ::Vector,
+    history_lock    ::ReentrantLock
+)::PhagyStats
+    t_start = time()
+    findings = String[]
+    items_examined = 0
+
+    # ── 1. ROLE DISTRIBUTION (sampled) ────────────────────────────────────
+    # GRUG: Sample up to 500 messages and check if one role dominates.
+    role_counts = Dict{String, Int}()
+    sample_size = 0
+
+    lock(history_lock) do
+        n_msgs = length(message_history)
+        if n_msgs == 0
+            push!(findings, "MEMORY_EMPTY: No messages in history cave. Nothing to analyze.")
+            return
+        end
+
+        # GRUG: Sample indices — take last 500 or all if fewer
+        sample_n = min(500, n_msgs)
+        start_idx = max(1, n_msgs - sample_n + 1)
+        for i in start_idx:n_msgs
+            msg = message_history[i]
+            role_counts[msg.role] = get(role_counts, msg.role, 0) + 1
+            sample_size += 1
+        end
+        items_examined += sample_size
+    end
+
+    if sample_size > 0
+        # GRUG: Check for role imbalance
+        max_role = ""
+        max_count = 0
+        for (role, count) in role_counts
+            if count > max_count
+                max_count = count
+                max_role = role
+            end
+        end
+        ratio = max_count / sample_size
+        if ratio > FORENSICS_STALE_MSG_RATIO
+            push!(findings, "ROLE_IMBALANCE: Role '$max_role' dominates $(round(ratio*100, digits=1))% of sampled messages ($max_count/$sample_size). Cave echo chamber detected.")
+        else
+            push!(findings, "ROLE_BALANCE_OK: No single role exceeds $(round(FORENSICS_STALE_MSG_RATIO*100))% threshold. Roles: $(join(["$k=$v" for (k,v) in role_counts], ", "))")
+        end
+    end
+
+    # ── 2. PATTERN DIVERSITY ESTIMATE (hash-based) ────────────────────────
+    # GRUG: Sample node patterns and estimate diversity via unique hash ratio.
+    pattern_hashes = Set{UInt64}()
+    alive_sample = 0
+
+    lock(node_lock) do
+        sample_count = 0
+        for (id, node) in node_map
+            node.is_grave && continue
+            push!(pattern_hashes, hash(lowercase(strip(node.pattern))))
+            alive_sample += 1
+            sample_count += 1
+            # GRUG: Sample up to 1000 alive nodes for speed
+            sample_count >= 1000 && break
+        end
+        items_examined += sample_count
+    end
+
+    if alive_sample > 0
+        diversity = length(pattern_hashes) / alive_sample
+        if diversity < FORENSICS_PATTERN_ENTROPY_LO
+            push!(findings, "LOW_PATTERN_DIVERSITY: Only $(round(diversity*100, digits=1))% unique patterns in $alive_sample sampled nodes. Herd mentality detected.")
+        else
+            push!(findings, "PATTERN_DIVERSITY_OK: $(round(diversity*100, digits=1))% unique patterns across $alive_sample sampled nodes.")
+        end
+    else
+        push!(findings, "NO_ALIVE_NODES: Zero alive nodes to sample. Cave is a graveyard.")
+    end
+
+    # ── 3. STRENGTH DISTRIBUTION SHAPE (approximate histogram) ────────────
+    # GRUG: Bucket alive node strengths into 5 bands and check for monoculture.
+    bands = Dict("0.0-2.0" => 0, "2.0-4.0" => 0, "4.0-6.0" => 0, "6.0-8.0" => 0, "8.0-10.0" => 0)
+    total_banded = 0
+
+    lock(node_lock) do
+        count = 0
+        for (id, node) in node_map
+            node.is_grave && continue
+            s = node.strength
+            if s < 2.0
+                bands["0.0-2.0"] += 1
+            elseif s < 4.0
+                bands["2.0-4.0"] += 1
+            elseif s < 6.0
+                bands["4.0-6.0"] += 1
+            elseif s < 8.0
+                bands["6.0-8.0"] += 1
+            else
+                bands["8.0-10.0"] += 1
+            end
+            total_banded += 1
+            count += 1
+            count >= 1000 && break
+        end
+    end
+
+    if total_banded > 0
+        max_band_count = maximum(values(bands))
+        max_band_ratio = max_band_count / total_banded
+        if max_band_ratio > FORENSICS_STRENGTH_SKEW_MAX
+            dominant_band = [k for (k,v) in bands if v == max_band_count][1]
+            push!(findings, "STRENGTH_MONOCULTURE: $(round(max_band_ratio*100, digits=1))% of nodes in band $dominant_band. Population lacks stratification.")
+        else
+            band_str = join(["$k=$(v)" for (k,v) in sort(collect(bands), by=x->x[1])], ", ")
+            push!(findings, "STRENGTH_SPREAD_OK: Bands: $band_str")
+        end
+    end
+
+    # ── 4. MEMORY ECHO DETECTION (sampled) ────────────────────────────────
+    # GRUG: Check for repeated message content in recent history.
+    echo_count = 0
+    echo_sample = 0
+
+    lock(history_lock) do
+        n_msgs = length(message_history)
+        if n_msgs >= 2
+            check_n = min(200, n_msgs)
+            start_idx = max(1, n_msgs - check_n + 1)
+            seen_hashes = Dict{UInt64, Int}()
+            for i in start_idx:n_msgs
+                h = hash(message_history[i].text)
+                seen_hashes[h] = get(seen_hashes, h, 0) + 1
+                echo_sample += 1
+            end
+            echo_count = count(v -> v > 1, values(seen_hashes))
+            items_examined += echo_sample
+        end
+    end
+
+    if echo_sample > 0 && echo_count > 0
+        push!(findings, "MEMORY_ECHOES: $echo_count distinct messages repeated in last $echo_sample entries. Possible input loops.")
+    elseif echo_sample > 0
+        push!(findings, "NO_ECHOES: All $echo_sample sampled messages are unique content.")
+    end
+
+    elapsed_ms = (time() - t_start) * 1000.0
+    report = join(findings, " | ")
+    println("[PHAGY:FORENSICS:FUZZY] 🔍  Complete. Findings: $report")
+    return PhagyStats("MEMORY_FORENSICS_FUZZY", items_examined, length(findings), elapsed_ms, report)
+end
+
+"""
+metric_memory_forensics!(node_map, node_lock, message_history, history_lock)::PhagyStats
+
+GRUG: EXACT / MEASUREMENT-BASED MEMORY ANALYSIS.
+Full enumeration with precise metrics. Slower but accurate.
+Checks:
+  1. Exact message count by role (full enumeration)
+  2. Dead node reference audit (messages referencing graved/deleted nodes)
+  3. Pinned message ratio and age analysis
+  4. Node strength statistics (mean, median, std dev, min, max)
+  5. Grave ratio and grave reason breakdown
+  6. Orphan count (alive nodes with 0 neighbors and 0 strength)
+
+This mode is THOROUGH but SLOWER. Enumerates everything exactly.
+All observations are READ-ONLY.
+"""
+function metric_memory_forensics!(
+    node_map        ::Dict,
+    node_lock       ::ReentrantLock,
+    message_history ::Vector,
+    history_lock    ::ReentrantLock
+)::PhagyStats
+    t_start = time()
+    findings = String[]
+    items_examined = 0
+
+    # ── 1. EXACT MESSAGE CENSUS ───────────────────────────────────────────
+    role_counts = Dict{String, Int}()
+    total_msgs = 0
+    pinned_count = 0
+    oldest_pinned_id = typemax(Int)
+
+    lock(history_lock) do
+        total_msgs = length(message_history)
+        for msg in message_history
+            role_counts[msg.role] = get(role_counts, msg.role, 0) + 1
+            if msg.pinned
+                pinned_count += 1
+                if msg.id < oldest_pinned_id
+                    oldest_pinned_id = msg.id
+                end
+            end
+        end
+        items_examined += total_msgs
+    end
+
+    if total_msgs == 0
+        push!(findings, "MEMORY_EMPTY: 0 messages total.")
+    else
+        role_str = join(["$k=$v" for (k,v) in sort(collect(role_counts), by=x->x[1])], ", ")
+        push!(findings, "MSG_CENSUS: total=$total_msgs, roles=[$role_str]")
+        pin_pct = round(pinned_count / total_msgs * 100, digits=1)
+        push!(findings, "PINNED: $pinned_count/$total_msgs ($pin_pct%)" * (oldest_pinned_id < typemax(Int) ? ", oldest_pin_id=$oldest_pinned_id" : ""))
+    end
+
+    # ── 2. NODE POPULATION METRICS ────────────────────────────────────────
+    total_nodes = 0
+    alive_nodes = 0
+    grave_nodes = 0
+    grave_reasons = Dict{String, Int}()
+    strengths = Float64[]
+    orphan_count = 0
+    image_node_count = 0
+
+    lock(node_lock) do
+        for (id, node) in node_map
+            total_nodes += 1
+            if node.is_grave
+                grave_nodes += 1
+                reason = isempty(node.grave_reason) ? "UNKNOWN" : node.grave_reason
+                grave_reasons[reason] = get(grave_reasons, reason, 0) + 1
+            else
+                alive_nodes += 1
+                push!(strengths, node.strength)
+                if length(node.neighbor_ids) == 0 && node.strength <= 0.0
+                    orphan_count += 1
+                end
+            end
+            if node.is_image_node
+                image_node_count += 1
+            end
+        end
+        items_examined += total_nodes
+    end
+
+    push!(findings, "NODE_POP: total=$total_nodes, alive=$alive_nodes, grave=$grave_nodes, image=$image_node_count")
+
+    if grave_nodes > 0
+        grave_str = join(["$k=$v" for (k,v) in sort(collect(grave_reasons), by=x->x[1])], ", ")
+        grave_pct = round(grave_nodes / total_nodes * 100, digits=1)
+        push!(findings, "GRAVE_BREAKDOWN: $grave_pct% dead [$grave_str]")
+    end
+
+    if alive_nodes > 0
+        mean_str = round(sum(strengths) / length(strengths), digits=3)
+        sorted_s = sort(strengths)
+        median_str = round(sorted_s[div(length(sorted_s)+1, 2)], digits=3)
+        min_str = round(minimum(strengths), digits=3)
+        max_str = round(maximum(strengths), digits=3)
+        # GRUG: Compute standard deviation manually (no Statistics.jl dependency)
+        mean_val = sum(strengths) / length(strengths)
+        variance = sum((s - mean_val)^2 for s in strengths) / length(strengths)
+        std_str = round(sqrt(variance), digits=3)
+        push!(findings, "STRENGTH_STATS: mean=$mean_str, median=$median_str, std=$std_str, min=$min_str, max=$max_str")
+    else
+        push!(findings, "STRENGTH_STATS: N/A (no alive nodes)")
+    end
+
+    if orphan_count > 0
+        push!(findings, "ORPHANS: $orphan_count alive nodes with 0 neighbors and 0 strength")
+    end
+
+    # ── 3. DEAD NODE REFERENCE AUDIT ──────────────────────────────────────
+    # GRUG: Scan messages for node_id references that point to dead/missing nodes.
+    dead_refs = 0
+    total_refs = 0
+
+    lock(history_lock) do
+        lock(node_lock) do
+            for msg in message_history
+                # GRUG: Look for node_N patterns in message text
+                for m in eachmatch(r"node_\d+", msg.text)
+                    nid = m.match
+                    total_refs += 1
+                    if !haskey(node_map, nid) || node_map[nid].is_grave
+                        dead_refs += 1
+                    end
+                end
+            end
+        end
+    end
+    items_examined += total_refs
+
+    if total_refs > 0
+        dead_pct = round(dead_refs / total_refs * 100, digits=1)
+        push!(findings, "DEAD_REFS: $dead_refs/$total_refs ($dead_pct%) node references in messages point to dead/missing nodes")
+        if dead_refs / total_refs > FORENSICS_DEAD_REF_THRESHOLD
+            push!(findings, "⚠ DEAD_REF_ALERT: Dead reference ratio exceeds $(round(FORENSICS_DEAD_REF_THRESHOLD*100))% threshold")
+        end
+    else
+        push!(findings, "DEAD_REFS: No node references found in message history")
+    end
+
+    elapsed_ms = (time() - t_start) * 1000.0
+    report = join(findings, " | ")
+    println("[PHAGY:FORENSICS:METRIC] 📊  Complete. Findings: $report")
+    return PhagyStats("MEMORY_FORENSICS_METRIC", items_examined, length(findings), elapsed_ms, report)
+end
+
+
+# ==============================================================================
 # PHAGY DISPATCHER - ONE AUTOMATON PER CYCLE
 # ==============================================================================
 
 """
-run_phagy!(node_map, node_lock, hopfield_cache, cache_lock, rules, rules_lock)::PhagyStats
+run_phagy!(node_map, node_lock, hopfield_cache, cache_lock, rules, rules_lock;
+           message_history=nothing, history_lock=nothing)::PhagyStats
 
 GRUG: Main phagy entry point. Randomly selects ONE automaton to run this cycle.
-Selection is weighted equally (1/6 each) - no automaton gets priority over others.
+Selection is weighted equally (1/7 each) - no automaton gets priority over others.
+Automaton 7 (MEMORY FORENSICS) requires message_history and history_lock kwargs.
+If those kwargs are not provided and automaton 7 is rolled, it re-rolls to 1-6.
 Each automaton is self-contained and handles its own locking.
 
 Returns PhagyStats from the automaton that ran. Logs result to PHAGY_LOG.
@@ -528,7 +912,9 @@ function run_phagy!(
     hopfield_cache  ::Dict,
     cache_lock      ::ReentrantLock,
     rules           ::Vector,
-    rules_lock      ::ReentrantLock
+    rules_lock      ::ReentrantLock;
+    message_history ::Union{Vector, Nothing} = nothing,
+    history_lock    ::Union{ReentrantLock, Nothing} = nothing
 )::PhagyStats
 
     # GRUG: Validate inputs - phagy must not run against corrupted state
@@ -542,10 +928,17 @@ function run_phagy!(
         throw(PhagyError("!!! FATAL: run_phagy! got invalid rules_lock! !!!"))
     end
 
-    # GRUG: Roll the automaton selector (1-6, uniform)
-    automaton_roll = rand(1:6)
+    # GRUG: Roll the automaton selector (1-7, uniform)
+    automaton_roll = rand(1:7)
 
-    println("[PHAGY] 🦠  Phagy cycle starting. Automaton roll: $automaton_roll/6")
+    # GRUG: If automaton 7 is rolled but message_history/history_lock not provided,
+    # re-roll to 1-6. Forensics needs memory access — no silent skip.
+    if automaton_roll == 7 && (isnothing(message_history) || isnothing(history_lock))
+        println("[PHAGY] 🦠  Rolled MEMORY_FORENSICS but no message_history provided. Re-rolling 1-6.")
+        automaton_roll = rand(1:6)
+    end
+
+    println("[PHAGY] 🦠  Phagy cycle starting. Automaton roll: $automaton_roll/7")
 
     stats = try
         if automaton_roll == 1
@@ -560,9 +953,11 @@ function run_phagy!(
             compact_drop_tables!(node_map, node_lock)
         elseif automaton_roll == 6
             prune_dormant_rules!(rules, rules_lock)
+        elseif automaton_roll == 7
+            run_memory_forensics!(node_map, node_lock, message_history, history_lock)
         else
-            # GRUG: Should be unreachable. If rand(1:6) returns something else, cave is haunted.
-            throw(PhagyError("!!! FATAL: automaton_roll=$automaton_roll is out of range [1,6]! !!!"))
+            # GRUG: Should be unreachable. If rand(1:7) returns something else, cave is haunted.
+            throw(PhagyError("!!! FATAL: automaton_roll=$automaton_roll is out of range [1,7]! !!!"))
         end
     catch e
         # GRUG: Automaton failure is NOT silent. Surface it immediately.
@@ -584,9 +979,9 @@ end # module PhagyMode
 # ARCHITECTURAL SPECIFICATION: PHAGY MODE LAYER
 #
 # 1. ONE AUTOMATON PER CYCLE (BIG-O SAFETY):
-# Phagy never runs all six automata in one idle event. A single random automaton
+# Phagy never runs all seven automata in one idle event. A single random automaton
 # is selected per cycle. This bounds the worst-case idle work to O(N) where N
-# is the number of nodes/rules/cache entries. No compounding sweep costs.
+# is the number of nodes/rules/cache entries/messages. No compounding sweep costs.
 #
 # 2. TWO-PASS MUTATION PATTERN:
 # Automata that need to delete/modify entries first collect candidates under a
@@ -609,4 +1004,12 @@ end # module PhagyMode
 # 6. HOPFIELD CACHE DUAL-LOCK ORDER:
 # CACHE_VALIDATOR always acquires cache_lock THEN node_lock (in that order).
 # All other code touching both locks must respect this order to prevent deadlock.
+#
+# 7. MEMORY FORENSICS (AUTOMATON 7):
+# Coinflip selects between FUZZY (approximate heuristic, sampled) and METRIC
+# (exact measurement, full enumeration) analysis modes. Both are READ-ONLY —
+# forensics never mutates MESSAGE_HISTORY or NODE_MAP. Forensics requires
+# message_history and history_lock kwargs; if not provided and automaton 7 is
+# rolled, the dispatcher re-rolls to 1-6 (graceful fallback, not silent skip).
+# Dual-lock order for metric dead-ref audit: history_lock THEN node_lock.
 # ==============================================================================

@@ -77,7 +77,8 @@ end
 
 const MAX_HISTORY   = 10000
 const MESSAGE_HISTORY = Vector{ChatMessage}()
-const MSG_ID_COUNTER  = Atomic{Int}(0)
+const MSG_ID_COUNTER       = Atomic{Int}(0)
+const MESSAGE_HISTORY_LOCK = ReentrantLock()  # GRUG: Lock for phagy forensics read-access to MESSAGE_HISTORY
 
 # GRUG FIX 3.1: Strict Role Validation!
 # Grug no let random strangers paint on memory wall.
@@ -1837,7 +1838,9 @@ function maybe_run_idle()
                 HOPFIELD_CACHE,
                 HOPFIELD_CACHE_LOCK,
                 rules_snapshot,
-                PHAGY_RULES_LOCK
+                PHAGY_RULES_LOCK;
+                message_history = MESSAGE_HISTORY,
+                history_lock    = MESSAGE_HISTORY_LOCK
             )
         catch e
             println("[IDLE:PHAGY] !!! ERROR during phagy cycle: $e !!!")

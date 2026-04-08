@@ -20,6 +20,8 @@ const ALL_TESTS = [
     "test_input_queue.jl",
     "test_action_packet.jl",
     "test_smoke.jl",
+    "test_phagy.jl",
+    "test_node_attach.jl",
 ]
 
 @testset "GrugBot420 Tests" begin

@@ -22,6 +22,9 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 │  PatternScanner │ ImageSDF │ EyeSystem          │
 ├─────────────────┴──────────┴────────────────────┤
 │         StochasticHelper (@coinflip)            │
+├─────────────────────────────────────────────────┤
+│  PhagyMode (7 Idle Maintenance Automata)        │
+│  MemoryForensics (Coinflip: Fuzzy │ Metric)     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -33,6 +36,7 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 4. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
 5. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override
 6. **Decay** — Unused nodes lose strength over time; grave nodes may be recycled by PhagyMode
+7. **Forensics** — During idle cycles, PhagyMode may roll Automaton 7 (Memory Forensics) to audit message history and node population health. This is read-only observation, never mutation.
 
 ## Attachment Relay (Relational Fire)
 
@@ -45,6 +49,44 @@ Key properties:
 - Deduplication: no node appears twice in the expanded set
 - Fired attachments get a `bump_strength!` call (they earned it)
 - Fully serialized in specimen save/load (section 14 / 4.14)
+
+## PhagyMode (Idle Maintenance Automata)
+
+PhagyMode runs one randomly selected automaton per idle cycle. There are seven automata:
+
+1. **Orphan Pruner** — Graves nodes with zero neighbors and zero strength
+2. **Strength Decayer** — Decays forgotten node strengths toward a floor
+3. **Grave Recycler** — Reclaims resources from long-dead grave nodes
+4. **Hopfield Cache Validator** — Purges stale or orphaned cache entries
+5. **Drop Table Compactor** — Trims low-probability drop table entries (preserves last entry)
+6. **Rule Pruner** — Flags dormant rules by tracking fire count and dormancy strikes
+7. **Memory Forensics** — Coinflip-gated read-only analysis of message history and node health
+
+Selection is uniform (`rand(1:7)`). If Automaton 7 is rolled but `message_history` / `history_lock` kwargs are not available, the dispatcher re-rolls to 1–6 (graceful fallback, not silent skip). Each automaton handles its own locking and returns a `PhagyStats` result that is logged to the `PHAGY_LOG` ring buffer.
+
+## Memory Forensics (Automaton 7)
+
+Memory Forensics is a read-only diagnostic system that audits the health of `MESSAGE_HISTORY` and `NODE_MAP`. A coinflip (`rand(Bool)`) selects between two analysis modes:
+
+**Fuzzy Mode** (approximate, heuristic, sampled) — fast for large caves:
+- Role distribution balance (samples up to 500 messages, flags if one role exceeds 90%)
+- Pattern diversity estimate (hash-based unique ratio across up to 1000 alive nodes)
+- Strength distribution shape (5-band histogram, flags if >80% cluster in one band)
+- Memory echo detection (samples 200 recent messages for repeated content)
+
+**Metric Mode** (exact, measurement-based, full enumeration) — thorough but slower:
+- Exact message census by role with totals
+- Node population metrics (alive, grave, image node counts, grave reason breakdown)
+- Dead node reference audit (regex scan of messages for `node_\d+` references to dead/missing nodes)
+- Pinned message tracking (count, percentage, oldest pinned message ID)
+- Strength statistics (mean, median, std dev, min, max — computed without Statistics.jl)
+- Orphan detection (alive nodes with 0 neighbors and 0 strength)
+
+Key design properties:
+- **Read-only** — forensics never mutates MESSAGE_HISTORY or NODE_MAP
+- **No silent failures** — all errors propagate via `PhagyError`, never swallowed
+- **Dual-lock order** — metric dead-ref audit acquires `history_lock` then `node_lock` (consistent ordering prevents deadlock)
+- **Configurable thresholds** — `FORENSICS_STALE_MSG_RATIO`, `FORENSICS_DEAD_REF_THRESHOLD`, `FORENSICS_PATTERN_ENTROPY_LO`, `FORENSICS_STRENGTH_SKEW_MAX`
 
 ## File Reference
 
@@ -63,5 +105,5 @@ Key properties:
 | `src/Thesaurus.jl` | Dimensional similarity engine |
 | `src/InputQueue.jl` | FIFO queue and NegativeThesaurus |
 | `src/ChatterMode.jl` | Idle gossip system |
-| `src/PhagyMode.jl` | Maintenance automata |
+| `src/PhagyMode.jl` | 7 maintenance automata including memory forensics |
 | `src/Main.jl` | CLI loop, memory cave, specimen persistence |

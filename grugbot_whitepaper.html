@@ -642,7 +642,7 @@ One of six maintenance automata runs per cycle:</p>
 
 <div class="grug-box">
     Only ONE automaton runs per cycle. This is how Grug keeps Big-O safe.
-    Six automata running at once would be like six cave bears in one cave. Bad!
+    Seven automata running at once would be like six cave bears in one cave. Bad!
 </div>
 
 <!-- ================================================================ -->
@@ -1251,6 +1251,8 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
         <li><code>AttachedNode</code> struct with pre-baked signal vectors for zero-allocation hot-path firing</li>
         <li>Full validation on attach/detach: existence, grave, self-attach, max cap, duplicate checks &mdash; no silent failures</li>
         <li>Updated BOOT_MSG, HELP_MSG, <code>/nodes</code> output, and all documentation</li>
+        <li>Memory Forensics (Automaton 7): coinflip-selected fuzzy/metric analysis of message history and node population health</li>
+        <li>Comprehensive test suites: test_phagy.jl (28 groups) and test_node_attach.jl (19 groups)</li>
     </ul>
     <h4>v7.1</h4>
     <ul>

@@ -79,6 +79,35 @@ The attachment system enables explicit relational firing chains between nodes. I
 
 - `get_attachments_for_target(target_id)` — Simple accessor returning the `Vector{AttachedNode}` for a given target (empty vector if none).
 
+## PhagyMode (`PhagyMode`)
+
+Idle maintenance automata system with seven automata. Exported functions and types:
+
+### Types
+
+- `PhagyStats` — Return type for all automata. Fields: `automaton::String` (name), `items_examined::Int`, `items_changed::Int`, `cycle_time_ms::Float64`, `notes::String` (human-readable report).
+- `PhagyError` — Custom exception type for structural failures (invalid locks, corrupted state). Always propagated, never silently swallowed.
+
+### Core Functions
+
+- `run_phagy!(node_map, node_lock, hopfield_cache, cache_lock, rules, rules_lock; message_history=nothing, history_lock=nothing)::PhagyStats` — Main entry point. Randomly selects one of seven automata to run. Automaton 7 (Memory Forensics) requires the optional `message_history` and `history_lock` kwargs; if not provided and Automaton 7 is rolled, re-rolls to 1–6.
+- `get_phagy_log()::Vector{PhagyStats}` — Returns a copy of the `PHAGY_LOG` ring buffer (last 50 cycle results).
+
+### Memory Forensics Functions
+
+- `run_memory_forensics!(node_map, node_lock, message_history, history_lock)::PhagyStats` — Dispatcher. Validates locks, flips a coin (`rand(Bool)`), routes to fuzzy or metric mode. Returns `PhagyStats` with findings in the `notes` field.
+- `fuzzy_memory_forensics!(node_map, node_lock, message_history, history_lock)::PhagyStats` — Approximate heuristic analysis. Samples up to 500 messages for role balance, 1000 nodes for pattern diversity and strength distribution, 200 messages for echo detection. Returns `PhagyStats` with automaton name `"MEMORY_FORENSICS_FUZZY"`.
+- `metric_memory_forensics!(node_map, node_lock, message_history, history_lock)::PhagyStats` — Exact measurement-based analysis. Full enumeration of message census, node population, dead reference audit, pinned tracking, strength statistics, and orphan count. Returns `PhagyStats` with automaton name `"MEMORY_FORENSICS_METRIC"`.
+
+### Forensics Constants
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `FORENSICS_STALE_MSG_RATIO` | `0.90` | Role imbalance threshold — flag if one role exceeds 90% of messages |
+| `FORENSICS_DEAD_REF_THRESHOLD` | `0.10` | Dead reference alert — flag if >10% of node refs in messages are dead |
+| `FORENSICS_PATTERN_ENTROPY_LO` | `0.15` | Low diversity — flag if <15% unique patterns among alive nodes |
+| `FORENSICS_STRENGTH_SKEW_MAX` | `0.80` | Monoculture — flag if >80% of nodes cluster in one strength band |
+
 ## Input Queue (`InputQueue`)
 
 Bounded input queue with integrated `NegativeThesaurus` inhibition filter. Strips inhibited tokens before pattern matching begins.

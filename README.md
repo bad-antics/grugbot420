@@ -304,7 +304,7 @@ Rules with no `[prob=X]` suffix default to `prob=1.0` (always fire).
 When the cave has been quiet for ~120 seconds (±30s jitter), GrugBot runs an idle action automatically — a 50/50 coinflip between:
 
 - **Chatter (1000+ nodes only):** 50–500 node clones gossip and exchange patterns. Only **weak** nodes morph — receivers must be weaker than senders. Each node can only morph **once per 24 hours** (cooldown enforced). New specimens with < 1000 nodes skip chatter entirely.
-- **Phagy (1000+ nodes only):** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, or rule pruning).
+- **Phagy (1000+ nodes only):** One maintenance automaton runs (orphan pruning, strength decay, grave recycling, cache validation, drop table compaction, rule pruning, or memory forensics).
 
 Both chatter and phagy share the same slow idle timer and the same 1000+ node population gate. New specimens with < 1000 nodes skip all idle actions entirely. If fewer than 50 eligible nodes exist in a chatter round, the group size floors at whatever is available. You don't need to trigger this manually. It runs between CLI prompts.
 
@@ -331,7 +331,8 @@ julia test/test_chat_specimen.jl    # 18 specimens
 julia test/test_input_queue.jl      # 20 groups, 1095 assertions
 julia test/test_action_packet.jl    # 18 groups, 111 assertions
 julia test/test_load_specimen.jl    # 14 groups, 102 assertions
-julia test/test_phagy.jl            # Phagy cycle (placeholder)
+julia test/test_phagy.jl            # 28 groups, phagy automata + memory forensics
+julia test/test_node_attach.jl     # 19 groups, relational fire attachment system
 julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
 ```
 
@@ -351,7 +352,7 @@ julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail
 | `src/Thesaurus.jl` | Dimensional similarity engine with seed synonym dictionary, gate filter, and runtime seed injection. |
 | `src/InputQueue.jl` | FIFO input queue and NegativeThesaurus inhibition filter. |
 | `src/ChatterMode.jl` | Idle gossip system (v7.1): 50–500 ephemeral clones, 1000+ node gate, weak-only morph, 24h cooldown, 120s±30s shared timer. |
-| `src/PhagyMode.jl` | Six idle-time maintenance automata for self-healing map management. |
+| `src/PhagyMode.jl` | Seven idle-time maintenance automata for self-healing map management (includes memory forensics). |
 | `src/EyeSystem.jl` | Visual attention: edge blurring, arousal-gated center cutout, attention modulation. |
 | `src/ImageSDF.jl` | JIT image → SDF parameter conversion for image node matching. |
 | `src/SemanticVerbs.jl` | Live mutable verb registry: causal, spatial, temporal classes + runtime synonyms. |
