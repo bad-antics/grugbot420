@@ -15,14 +15,29 @@ println("="^60)
 # ==============================================================================
 println("\n[1] MODULE LOADS")
 
-include("../src/stochastichelper.jl");       using .CoinFlipHeader;        println("  ✓ StochasticHelper")
-include("../src/patternscanner.jl");         using .PatternScanner;        println("  ✓ PatternScanner")
-include("../src/ImageSDF.jl");               using .ImageSDF;              println("  ✓ ImageSDF")
-include("../src/EyeSystem.jl");              using .EyeSystem;             println("  ✓ EyeSystem")
-include("../src/ChatterMode.jl");            using .ChatterMode;           println("  ✓ ChatterMode")
-include("../src/SemanticVerbs.jl");          using .SemanticVerbs;         println("  ✓ SemanticVerbs")
-include("../src/ActionTonePredictor.jl");    using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
-include("../src/engine.jl")
+# GRUG: Guard all includes to prevent double-define when running in runtests.jl suite
+if !isdefined(Main, :CoinFlipHeader); include("../src/stochastichelper.jl"); end
+using .CoinFlipHeader;        println("  ✓ StochasticHelper")
+
+if !isdefined(Main, :PatternScanner); include("../src/patternscanner.jl"); end
+using .PatternScanner;        println("  ✓ PatternScanner")
+
+if !isdefined(Main, :ImageSDF); include("../src/ImageSDF.jl"); end
+using .ImageSDF;              println("  ✓ ImageSDF")
+
+if !isdefined(Main, :EyeSystem); include("../src/EyeSystem.jl"); end
+using .EyeSystem;             println("  ✓ EyeSystem")
+
+if !isdefined(Main, :ChatterMode); include("../src/ChatterMode.jl"); end
+using .ChatterMode;           println("  ✓ ChatterMode")
+
+if !isdefined(Main, :SemanticVerbs); include("../src/SemanticVerbs.jl"); end
+using .SemanticVerbs;         println("  ✓ SemanticVerbs")
+
+if !isdefined(Main, :ActionTonePredictor); include("../src/ActionTonePredictor.jl"); end
+using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
+
+if !isdefined(Main, :words_to_signal); include("../src/engine.jl"); end
 println("  ✓ Engine (full chain)")
 
 # ==============================================================================
