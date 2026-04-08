@@ -732,6 +732,81 @@ end
 end
 
 # ==============================================================================
+# 26. SELECTIVE SCAN — _effective_scan_mode complexity downgrade
+# ==============================================================================
+@testset "SelectiveScan - Pattern complexity downgrade" begin
+    # GRUG: Test that _effective_scan_mode correctly caps scan tier
+    # based on node signal length (pattern complexity).
+
+    # --- Tiny pattern (≤3 tokens) → always capped at mode 1 (cheap) ---
+    tiny_signal = [0.5, 0.3]  # 2 elements
+    @test _effective_scan_mode(1, tiny_signal) == 1  # 1 stays 1
+    @test _effective_scan_mode(2, tiny_signal) == 1  # 2 downgraded to 1
+    @test _effective_scan_mode(3, tiny_signal) == 1  # 3 downgraded to 1
+
+    # Edge case: exactly 3 tokens
+    three_signal = [0.1, 0.2, 0.3]
+    @test _effective_scan_mode(3, three_signal) == 1  # 3 downgraded to 1
+
+    # --- Medium pattern (4-8 tokens) → capped at mode 2 (medium) ---
+    medium_signal = [0.1, 0.2, 0.3, 0.4, 0.5]  # 5 elements
+    @test _effective_scan_mode(1, medium_signal) == 1  # 1 stays 1 (can't upgrade)
+    @test _effective_scan_mode(2, medium_signal) == 2  # 2 stays 2
+    @test _effective_scan_mode(3, medium_signal) == 2  # 3 downgraded to 2
+
+    # Edge case: exactly 8 tokens
+    eight_signal = Float64.(1:8)
+    @test _effective_scan_mode(3, eight_signal) == 2  # Still capped at 2
+
+    # --- Complex pattern (>8 tokens) → no cap, full tier ---
+    complex_signal = Float64.(1:12)  # 12 elements
+    @test _effective_scan_mode(1, complex_signal) == 1  # Input says cheap, stays cheap
+    @test _effective_scan_mode(2, complex_signal) == 2  # Input says medium, stays medium
+    @test _effective_scan_mode(3, complex_signal) == 3  # Input says high-res, gets high-res
+
+    # Edge case: exactly 9 tokens (threshold boundary)
+    nine_signal = Float64.(1:9)
+    @test _effective_scan_mode(3, nine_signal) == 3  # 9 > 8, no cap
+
+    # --- Empty signal → returns base mode (let scanner handle the error) ---
+    @test _effective_scan_mode(1, Float64[]) == 1
+    @test _effective_scan_mode(3, Float64[]) == 3
+
+    # --- Single token → always cheap ---
+    single = [0.99]
+    @test _effective_scan_mode(3, single) == 1
+
+    println("  ✓ [26] Selective scan: pattern complexity correctly downgrades scan tier")
+end
+
+# ==============================================================================
+# 27. SELECTIVE SCAN — screen_input_complexity base tiers
+# ==============================================================================
+@testset "SelectiveScan - Input complexity tiers" begin
+    # GRUG: Verify screen_input_complexity returns correct base tiers
+    # based on signal length and triple count.
+
+    # Short signal, no triples → tier 1 (cheap)
+    short_signal = [0.5, 0.3]
+    @test screen_input_complexity(short_signal, RelationalTriple[]) == 1
+
+    # Medium signal with triples → tier 2 (medium)
+    med_signal = Float64.(1:10)
+    one_triple = [RelationalTriple("a", "likes", "b")]
+    @test screen_input_complexity(med_signal, one_triple) == 2
+
+    # Long signal with many triples → tier 3 (high-res)
+    long_signal = Float64.(1:30)
+    many_triples = [RelationalTriple("a", "r$i", "b") for i in 1:5]
+    @test screen_input_complexity(long_signal, many_triples) == 3
+
+    # Empty signal → error (no silent failure)
+    @test_throws ErrorException screen_input_complexity(Float64[], RelationalTriple[])
+
+    println("  ✓ [27] Input complexity: base scan tiers computed correctly")
+end
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

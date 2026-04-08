@@ -31,7 +31,7 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 ## Node Lifecycle
 
 1. **Creation** — Nodes are planted via `/grow` with a pattern, action packet, and optional JSON data
-2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching
+2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching with selective scan tiers (cheap/medium/high-res) based on both input complexity and per-node pattern complexity
 3. **Attachment Relay** — Nodes that fired are checked for attachments; attached nodes do a strength-biased coinflip and winners join the vote pool (Pass 3 of `scan_and_expand`)
 4. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
 5. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override

@@ -368,7 +368,7 @@ julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail
 | `src/Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager, specimen persistence. |
 | `src/engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion, relational fire (JIT confidence baking, SDF image attachments). |
 | `src/stochastichelper.jl` | `@coinflip` macro and `bias()` helper for weighted probabilistic branching. |
-| `src/patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. |
+| `src/patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. Scan tier selected per-node based on input + pattern complexity. |
 | `src/Lobe.jl` | Subject-specific node partitions with O(1) reverse index. |
 | `src/LobeTable.jl` | Per-lobe chunked hash table storage (nodes, json, drop, hopfield, meta chunks). |
 | `src/BrainStem.jl` | Winner-take-all dispatcher with cross-lobe signal propagation and fire-count decay. |

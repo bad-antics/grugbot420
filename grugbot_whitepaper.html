@@ -280,7 +280,7 @@ User Input
               ▼
 ┌─────────────────────────────────┐
 │  Pattern Scanner                │  ◄── Token overlap + relational triples
-│  (scan_specimens)               │      Hopfield cache check
+│  (scan_specimens)               │      Selective scan tier (per-node complexity)
 └─────────────┬───────────────────┘
               │
               ▼
@@ -368,6 +368,31 @@ end</code></pre>
     <code>P(activate) = 0.1 + 0.8 × (strength / STRENGTH_CAP)</code>
     <p>Strength 0.0 → 10% chance. Strength 10.0 → 90% chance. This creates Darwinian selection pressure.</p>
 </div>
+
+<h3>Selective Pattern Scan <span class="new-badge">v7.3</span></h3>
+<p>
+Pattern scanning uses a <strong>two-factor tier selection</strong> system. The base tier is determined by
+<code>screen_input_complexity()</code> which examines the user input signal length and relational triple
+count. But each node's scan tier is further adjusted by <code>_effective_scan_mode()</code> based on
+the node's own pattern complexity &mdash; simple patterns get cheaper scans regardless of input complexity.
+</p>
+<div class="math-section">
+    <strong>Input complexity → base tier:</strong><br>
+    <code>score = (signal_length × 0.15) + (triple_count × 1.5)</code><br>
+    <code>score < 1.5 → tier 1 (cheap_scan)</code><br>
+    <code>score < 4.5 → tier 2 (medium_scan)</code><br>
+    <code>score ≥ 4.5 → tier 3 (high_res_scan)</code><br><br>
+    <strong>Per-node pattern complexity → tier cap:</strong><br>
+    <code>node signal ≤ 3 tokens → capped at tier 1</code><br>
+    <code>node signal 4–8 tokens → capped at tier 2</code><br>
+    <code>node signal > 8 tokens → no cap</code>
+</div>
+<p>
+The tier can only go <strong>down</strong>, never up. A complex input won't force a 2-token node through
+high-res two-pass scanning &mdash; the variance penalty would be numerically meaningless on such a
+short signal. This prevents O(n²) work on patterns too small to benefit from it, while ensuring
+complex patterns get the full discriminative power of high-res scanning when the input warrants it.
+</p>
 
 <!-- ================================================================ -->
 <h2 id="action-packets">4. Action Packets v2 (Pipe-Delimited) <span class="new-badge">v7</span></h2>

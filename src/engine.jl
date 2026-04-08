@@ -1300,6 +1300,54 @@ function screen_input_complexity(signal::Vector{Float64}, triples::Vector{Relati
     end
 end
 
+"""
+_effective_scan_mode(base_mode::Int, node_signal::Vector{Float64})::Int
+
+GRUG: SELECTIVE PATTERN SCAN — downgrade the scan tier based on node pattern
+complexity. The base_mode comes from screen_input_complexity (which looks at
+INPUT complexity). But a simple 2-token node pattern doesn't justify a high-res
+two-pass scan — cheap_scan would give the same answer with less work.
+
+This is per-node downgrade logic: the scan tier can only go DOWN, never UP.
+If the input demands cheap_scan (mode=1), the node can't push it to high_res.
+But if the input demands high_res (mode=3), a tiny node pattern drops it back.
+
+Pattern complexity thresholds:
+  - signal length ≤ 3 tokens  → mode capped at 1 (cheap scan only)
+  - signal length ≤ 8 tokens  → mode capped at 2 (medium scan max)
+  - signal length > 8 tokens  → no cap (full tier from input complexity)
+
+Why: Short patterns have so few signal values that the sliding window
+variance penalty in high_res_scan is numerically meaningless, and the
+stride optimization in cheap_scan already covers the full signal. Wasting
+O(n²) work on a 2-element pattern is cave fire.
+"""
+function _effective_scan_mode(base_mode::Int, node_signal::Vector{Float64})::Int
+    if isempty(node_signal)
+        # GRUG: Empty signal means this node can't be scanned at all.
+        # Return base_mode and let the scanner throw PatternNotFoundError.
+        return base_mode
+    end
+
+    sig_len = length(node_signal)
+
+    # GRUG: Short patterns → force cheap scan. The pattern is too small
+    # for medium/high-res to add any discriminative value.
+    if sig_len <= 3
+        return min(base_mode, 1)
+    end
+
+    # GRUG: Medium patterns → cap at medium scan. High-res two-pass
+    # variance penalty is meaningless with fewer than 8 signal values.
+    if sig_len <= 8
+        return min(base_mode, 2)
+    end
+
+    # GRUG: Complex patterns → full tier from input complexity. These
+    # patterns have enough signal to benefit from high-res scanning.
+    return base_mode
+end
+
 # ==============================================================================
 # DROP TABLE NEIGHBOR ACTIVATION
 # ==============================================================================
@@ -1493,9 +1541,17 @@ function scan_specimens(input_text::String)::Vector{Tuple{String, Float64, Bool,
                     # They only respond to image inputs that have been SDF-converted.
                     # Skip image nodes during text scans (they'll fire in image scan path).
                     continue
-                elseif scan_mode == 1
+                end
+
+                # GRUG: SELECTIVE PATTERN SCAN — downgrade scan tier for simple patterns.
+                # The base scan_mode is set by input complexity, but a tiny node pattern
+                # doesn't justify high-res. _effective_scan_mode caps the tier based on
+                # the node's own signal length. Cheap patterns get cheap scans.
+                effective_mode = _effective_scan_mode(scan_mode, node.signal)
+
+                if effective_mode == 1
                     _, token_conf = cheap_scan(target_signal, node.signal; threshold=0.3)
-                elseif scan_mode == 2
+                elseif effective_mode == 2
                     _, token_conf = medium_scan(target_signal, node.signal; threshold=0.4)
                 else
                     _, token_conf = high_res_scan(target_signal, node.signal; threshold=0.5)
