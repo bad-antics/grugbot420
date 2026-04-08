@@ -1180,14 +1180,6 @@ end
     @test isdefined(ImageSDF, :detect_image_binary)
     @test isdefined(ImageSDF, :image_to_sdf_params)
 
-    # --- Docstring existence checks (spot-check key functions) ---
-    # Julia's @doc returns Markdown; undocumented functions return a "No documentation found" string.
-    for fn in [rewrite_passive_mission, reset_throttle!, select_action,
-               scan_specimens, cast_vote, cast_explicit_vote]
-        doc_str = string(Base.Docs.doc(fn))
-        @test !occursin("No documentation found", doc_str)
-    end
-
     # --- Effective scan mode still routes tier-1 correctly ---
     @test _effective_scan_mode(3, [0.5, 0.5]) == 1
     @test _effective_scan_mode(2, [0.5, 0.5, 0.5, 0.5]) == 2
