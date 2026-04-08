@@ -87,9 +87,16 @@ const CAUSAL_VERBS   = SemanticVerbs.get_verbs_in_class("causal")    # snapshot 
 const SPATIAL_VERBS  = SemanticVerbs.get_verbs_in_class("spatial")   # snapshot at load time
 const TEMPORAL_VERBS = SemanticVerbs.get_verbs_in_class("temporal")  # snapshot at load time
 
+"""
+rewrite_passive_mission(input::String)::String
+
+GRUG: Rewrite passive voice constructs to active voice.
+"X was Y by Z" → "Z Y X". Used to normalize mission text before scanning.
+Throws on empty input — NO SILENT FAILURES.
+"""
 function rewrite_passive_mission(input::String)::String
     if strip(input) == ""
-        error("!!! Grug cannot rewrite empty air! !!!")
+        error("!!! FATAL: rewrite_passive_mission got empty input! Cannot rewrite empty air! !!!")
     end
     return replace(input, r"\b(\w+)\s+was\s+(\w+)\s+by\s+(\w+)\b"i => s"\3 \2 \1")
 end
@@ -1033,6 +1040,13 @@ end
 # THROTTLE RESET
 # ==============================================================================
 
+"""
+reset_throttle!(node::Node, relational_match_strength::Float64)
+
+GRUG: Reset a node's throttle based on relational match strength.
+Maps strength to smooth heat between 0.3 (cold) and 1.0 (hot) via
+continuous mapping instead of binary hot/cold. Thread-safe via NODE_LOCK.
+"""
 function reset_throttle!(node::Node, relational_match_strength::Float64)
     # GRUG FIX 2.4: Continuous Throttle Mapping!
     # Instead of binary hot/cold, Grug map relational strength to smooth heat between 0.3 and 1.0.
@@ -1253,6 +1267,13 @@ function parse_action_packet(packet::String)
     return positives, all_negatives, action_items
 end
 
+"""
+select_action(packet::String)
+
+GRUG: Select a single action from an action packet via weighted coinflip.
+Parses the packet into positives (weighted actions), picks one stochastically
+using CoinFlipHeader bias. Returns the selected action name.
+"""
 function select_action(packet::String)
     positives, negatives, _ = parse_action_packet(packet)
     total_weight = sum(p[2] for p in positives)
@@ -1561,6 +1582,14 @@ end
 # MAIN SCAN FUNCTION
 # ==============================================================================
 
+"""
+scan_specimens(input_text::String)::Vector{Tuple{String, Float64, Bool, Vector{RelationalTriple}, Vector{RelationalTriple}}}
+
+GRUG: Main scan entry point. Converts input text to signal, extracts relational
+triples, runs ActionTonePredictor, checks Hopfield fast-path, then scans all
+nodes for matches. Returns vector of (id, confidence, antimatch, user_triples,
+node_triples) tuples. Throws on empty input — NO SILENT FAILURES.
+"""
 function scan_specimens(input_text::String)::Vector{Tuple{String, Float64, Bool, Vector{RelationalTriple}, Vector{RelationalTriple}}}
     if strip(input_text) == ""
         error("!!! FATAL: Grug cannot scan empty air! Input text is blank! !!!")
@@ -1910,6 +1939,13 @@ end
 # VOTE CASTING
 # ==============================================================================
 
+"""
+cast_vote(id, conf, antimatch, u_trips, n_trips)
+
+GRUG: Cast a vote for a matched node. Selects a stochastic action from the
+node's action packet, bumps node strength on coinflip, and returns a Vote.
+Throws if node ID is empty or node vanished from NODE_MAP — NO SILENT FAILURES.
+"""
 function cast_vote(id, conf, antimatch, u_trips, n_trips)
     if strip(id) == "" error("!!! FATAL: Need real node ID to cast vote! !!!") end
     
@@ -1929,6 +1965,13 @@ function cast_vote(id, conf, antimatch, u_trips, n_trips)
     return Vote(id, winning_action, conf, negatives, u_trips, n_trips, antimatch)
 end
 
+"""
+cast_explicit_vote(cmd_name::String, id::String)::Vote
+
+GRUG: Cast an explicit vote bypassing stochastic action selection. Used for
+direct command overrides (e.g. /force). Sets confidence to 9999.0 (max priority).
+Throws if node not found — NO SILENT FAILURES.
+"""
 function cast_explicit_vote(cmd_name::String, id::String)::Vote
     # Helper to bypass everything
     node = lock(() -> get(NODE_MAP, id, nothing), NODE_LOCK)

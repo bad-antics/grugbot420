@@ -84,7 +84,12 @@ const MESSAGE_HISTORY_LOCK = ReentrantLock()  # GRUG: Lock for phagy forensics r
 # Grug no let random strangers paint on memory wall.
 const ALLOWED_ROLES = Set(["User", "System", "User_Pinned", "Engine_Voice"])
 
-# GRUG: Write new words on memory cave wall. If wall full, wash away old words.
+"""
+add_message_to_history!(role::String, text::String, pinned::Bool=false)
+
+GRUG: Write new words on memory cave wall. If wall full, wash away old words.
+Pinned messages survive eviction. Throws on empty input — NO SILENT FAILURES.
+"""
 function add_message_to_history!(role::String, text::String, pinned::Bool=false)
     if strip(text) == "" || strip(role) == ""
         error("!!! FATAL: Grug cannot paint empty air on memory cave wall! !!!")
@@ -121,7 +126,13 @@ end
 # EPHEMERAL AIML ORCHESTRATOR
 # ==============================================================================
 
-# GRUG: Read the pinned words and the fresh words to give context to the dynamic generation engine.
+"""
+extract_lobe_aware_context(votes::Vector{Vote})::String
+
+GRUG: Read the pinned words and the fresh words to give context to the dynamic
+generation engine. Extracts lobe knowledge from winning votes for AIML context.
+Non-fatal on lobe read errors — warns and returns error placeholder.
+"""
 function extract_lobe_aware_context(votes::Vector{Vote})::String
     # GRUG: Prefrontal cortex context injector!
     # Show which lobes are active and what knowledge is available from each.
@@ -180,6 +191,12 @@ function extract_lobe_aware_context(votes::Vector{Vote})::String
     end
 end
 
+"""
+extract_aiml_memory_context()::String
+
+GRUG: Chief Orchestrator reads memory wall — pinned and recent messages.
+Formats them for AIML context injection. Throws on read failure — NO SILENT FAILURES.
+"""
 function extract_aiml_memory_context()::String
     total_msgs = length(MESSAGE_HISTORY)
     if total_msgs == 0
@@ -218,9 +235,13 @@ function extract_aiml_memory_context()::String
 end
 
 # GRUG DOC 3.9: SUPERPOSITION ORCHESTRATOR!
-# Grug no longer picks just one rock. 
-# Grug finds the heaviest rocks (max confidence) and puts them in "Sure" basket.
-# For all smaller rocks, Grug flips a 50/50 coin to decide if they go in "Unsure" basket!
+"""
+ephemeral_aiml_orchestrator(mission::String, votes::Vector{Vote})
+
+GRUG: Superposition orchestrator. Finds heaviest rocks (max confidence) for "Sure"
+basket, coinflips smaller rocks into "Unsure" basket. Builds AIML payload and
+fires the generative engine. Throws on empty votes — NO SILENT FAILURES.
+"""
 function ephemeral_aiml_orchestrator(mission::String, votes::Vector{Vote})
     if isempty(votes)
         error("!!! FATAL: Orchestrator failed: Cave empty! Received zero votes! Cannot build fire! !!!")
@@ -274,7 +295,13 @@ end
 # COMMAND DEFINITIONS & JIT TEXT GENERATION
 # ==============================================================================
 
-# GRUG: Build text sandwich for the JIT Generative Builder, and synthesize the dynamic response!
+"""
+generate_aiml_payload(mission, primary_vote, sure_votes, unsure_votes, all_votes, context)
+
+GRUG: Build text sandwich for the JIT Generative Builder and synthesize
+the dynamic response. Assembles system prompt, mission, vote context, and
+memory into a single payload. Throws on missing context keys — NO SILENT FAILURES.
+"""
 function generate_aiml_payload(mission::String, primary_vote::Vote, sure_votes::Vector{Vote}, unsure_votes::Vector{Vote}, all_votes::Vector{Vote}, context::Dict)
     if !haskey(context, "system_prompt")
         error("!!! FATAL: Node dictionary missing 'system_prompt'! Grug confused! !!!")
@@ -1888,6 +1915,13 @@ end
 # MAIN CLI LOOP
 # ==============================================================================
 
+"""
+run_cli()
+
+GRUG: Main REPL loop. Prints boot message, then loops forever reading input.
+Dispatches commands (/ prefix) or runs mission scan. Triggers idle chatter/phagy
+between inputs via maybe_run_idle(). This is the top-level entry point.
+"""
 function run_cli()
     print(BOOT_MSG)
     

@@ -66,7 +66,8 @@ include("Main.jl")
 # --------------------------------------------------------------------------
 export @coinflip, bias
 export cheap_scan, medium_scan, high_res_scan
-export detect_image_binary, image_to_sdf_params, SDFParams
+export detect_image_binary, image_to_sdf_params, SDFParams, apply_sdf_jitter
+export sdf_to_signal, JITGPU
 export add_verb!, add_relation_class!, add_synonym!
 export create_lobe!, connect_lobes!, lobe_grow!
 export create_lobe_table!

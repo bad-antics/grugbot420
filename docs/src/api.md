@@ -46,6 +46,8 @@ The tier can only go **down**, never up. If the input demands cheap scan, the no
 - `JITGPU(binary; width, height)` — **GPU-accelerated** nonlinear SDF conversion via `KernelAbstractions.jl`. Dispatches `@kernel` functions to `CUDABackend()`, `ROCBackend()`, `MetalBackend()`, or `CPU()` (multithreaded, CI-safe) based on runtime detection. Two-pass kernel: Pass 1 decodes pixels in parallel; `synchronize(backend)` ensures all neighbors exist before Pass 2 computes `tanh(3 × grad_mag)` SDF activations. Returns `SDFParams`.
 - `image_to_sdf_params(pixels, width, height)` — CPU reference implementation (same algorithm as `JITGPU` but Float64 throughout). Kept for backward compatibility and test comparison.
 - `SDFParams` — struct holding the SDF representation of an image for pattern scanning.
+- `apply_sdf_jitter(params::SDFParams)` — injects small bounded per-element noise into SDF brightness/gradient values. Called each time an SDF fires to prevent identical repeat activations. Returns a new `SDFParams`.
+- `sdf_to_signal(params::SDFParams)` — flattens `SDFParams` into a `Vector{Float64}` signal for pattern scanning. Interleaves brightness and gradient values.
 
 ## Semantic Verbs (`SemanticVerbs`)
 

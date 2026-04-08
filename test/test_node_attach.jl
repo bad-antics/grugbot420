@@ -1140,6 +1140,59 @@ end
 end
 
 # ==============================================================================
+# 41. FINAL INTEGRATION — CODEBASE CLEANUP VERIFICATION
+# ==============================================================================
+@testset "CleanupVerification - error patterns, docstrings, exports" begin
+    # GRUG: Verify the cleanup audit didn't break anything and all contracts hold.
+
+    # --- Error pattern consistency ---
+    # rewrite_passive_mission must throw with FATAL pattern on empty input
+    err = try rewrite_passive_mission(""); nothing catch e string(e) end
+    @test err !== nothing
+    @test occursin("FATAL", err)
+
+    # --- JITGPU is callable (CPU backend) ---
+    # Minimal 2x2 RGBA image -> should return SDFParams without error
+    test_binary = UInt8[
+        255, 0, 0, 255,   0, 255, 0, 255,
+        0, 0, 255, 255,   128, 128, 128, 255
+    ]
+    sdf = JITGPU(test_binary; width=2, height=2)
+    @test sdf isa SDFParams
+    @test length(sdf.brightness) == 4
+
+    # --- Bidirectional scan contract ---
+    target = [0.1, 0.9, 0.1, 0.9, 0.5]
+    pattern = [0.1, 0.9]
+    _, bidi_conf = _bidirectional_cheap_scan(target, pattern; threshold=0.1)
+    @test isfinite(bidi_conf)
+    @test bidi_conf > 0.0
+
+    # --- Module re-exports from GrugBot420 ---
+    # These should be accessible at top level after the cleanup
+    @test isdefined(GrugBot420, :JITGPU)
+    @test isdefined(GrugBot420, :sdf_to_signal)
+    @test isdefined(GrugBot420, :apply_sdf_jitter)
+    @test isdefined(GrugBot420, :SDFParams)
+    @test isdefined(GrugBot420, :detect_image_binary)
+    @test isdefined(GrugBot420, :image_to_sdf_params)
+
+    # --- Docstring existence checks (spot-check key functions) ---
+    # Julia's @doc returns Markdown; undocumented functions return a "No documentation found" string.
+    for fn in [rewrite_passive_mission, reset_throttle!, select_action,
+               scan_specimens, cast_vote, cast_explicit_vote]
+        doc_str = string(Base.Docs.doc(fn))
+        @test !occursin("No documentation found", doc_str)
+    end
+
+    # --- Effective scan mode still routes tier-1 correctly ---
+    @test _effective_scan_mode(3, [0.5, 0.5]) == 1
+    @test _effective_scan_mode(2, [0.5, 0.5, 0.5, 0.5]) == 2
+
+    println("  ✓ [41] Cleanup verification: error patterns, exports, docstrings, scan routing all verified")
+end
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

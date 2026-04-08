@@ -25,8 +25,11 @@ using Random
 using KernelAbstractions
 
 export detect_image_binary, image_to_sdf_params, SDFParams, apply_sdf_jitter
-export TemporalCoherenceRecord, update_temporal_coherence!, sdf_to_signal
-export JITGPU
+export sdf_to_signal, JITGPU
+
+# GRUG: TemporalCoherenceRecord and update_temporal_coherence! are defined below
+# but NOT exported — they are unwired (no caller in the codebase). Kept as
+# future-facing infrastructure for temporal SDF tracking. Wire them before exporting.
 
 # ==============================================================================
 # ERROR TYPES - GRUG: NO SILENT FAILURES!
@@ -62,11 +65,13 @@ struct SDFParams
 end
 
 # ==============================================================================
-# TEMPORAL COHERENCE RECORD
+# TEMPORAL COHERENCE RECORD — UNWIRED (future-facing, no caller in codebase)
 # ==============================================================================
 
 # GRUG: Time step is meta-geometry! Grug use timestamps to organize SDF alignments.
 # When SDF params fire at similar timesteps, they are temporally coherent.
+# NOTE: This infrastructure is defined but NOT wired into any fire path.
+# Wire update_temporal_coherence! into fire_attachments! before using.
 mutable struct TemporalCoherenceRecord
     sdf_id::String
     last_fired::Float64              # GRUG: Unix timestamp of last activation
