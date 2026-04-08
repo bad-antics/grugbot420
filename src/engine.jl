@@ -553,18 +553,24 @@ end
 
 # GRUG: /nodeAttach lets user bolt up to 4 nodes onto a target node.
 # When the target fires (selected for voting), each attached node does a
-# strength-biased coinflip. Winners fire too — their user-defined CONNECTOR
-# PATTERN is scanned against the attached node's own pattern to determine
-# voting confidence. This is RELATIONAL FIRE: nodes ride on the coattails
-# of a parent node's activation, gated by coinflip and the biological
-# attention bottleneck (active_cap).
+# strength-biased coinflip. Winners fire too with a pre-baked confidence.
+# This is RELATIONAL FIRE: nodes ride on the coattails of a parent node's
+# activation, gated by coinflip and the biological attention bottleneck.
 #
-# The connector pattern is a MIDDLEMAN — it represents WHY these nodes are
-# related. When node A256 gets co-fired, the connector pattern is scanned
-# against A256's own contents (not the target's). This gives:
-#   1. A voting confidence: how well the relay reason matches the waking node
-#   2. A generative context: the connector pattern surfaces downstream so the
-#      generative pipeline knows WHY these nodes were co-activated
+# JIT CONFIDENCE BAKING: The connector pattern (middleman) is scanned against
+# the ATTACHED NODE's own pattern ONCE at attach time (in attach_node!).
+# The resulting base_confidence is stored in the AttachedNode struct. At fire
+# time, only stochastic jitter is applied — no re-scanning needed. This is
+# the JIT optimization: expensive work happens when the user issues the
+# /nodeAttach command, not every relay activation cycle.
+#
+# The connector pattern is still stored for:
+#   1. AIML reference: the middleman reason WHY these nodes are related
+#   2. Generative context: surfaces as a RelationalTriple downstream so the
+#      pipeline knows WHY these nodes were co-activated
+#
+# /imgnodeAttach does the same for image nodes: SDF conversion happens at
+# attach time (JIT GPU accel), base_confidence is baked from SDF similarity.
 #
 # GRUG: Attachment ≠ Neighbor linking. Neighbors are symmetric co-activation
 # via drop tables. Attachments are ASYMMETRIC: target fires → attached MAY fire.
@@ -574,6 +580,9 @@ struct AttachedNode
     node_id::String          # GRUG: ID of the node being attached (must exist in NODE_MAP)
     pattern::String          # GRUG: Connector pattern — middleman reason WHY these nodes are related
     signal::Vector{Float64}  # GRUG: Pre-baked signal from connector pattern (for PatternScanner compat)
+    base_confidence::Float64 # GRUG: JIT-baked confidence computed at attach time, NOT at fire time!
+                             #       Formula: token_overlap(connector, attached_node.pattern) + (strength/CAP)*0.5
+                             #       At fire time, only jitter is applied: max(0.1, base_confidence + jitter)
 end
 
 # GRUG: Map from target_node_id -> Vector of AttachedNode (max MAX_ATTACHMENTS each)
@@ -595,9 +604,15 @@ attach_node!(target_id::String, attach_id::String, pattern::String)::String
 
 GRUG: Bolt a node onto a target node with a connector pattern (middleman).
 When target fires, attached node does a coinflip to decide if it fires too.
-The connector pattern is scanned against the ATTACHED NODE's own pattern to
-determine confidence — it represents WHY these nodes are related. The pattern
-also surfaces downstream as generative context for the relay activation.
+
+JIT CONFIDENCE BAKING: The connector pattern is scanned against the ATTACHED
+NODE's own pattern ONCE at attach time to compute base_confidence. This is
+stored in the AttachedNode struct so fire_attachments! never re-scans — it
+only applies stochastic jitter to the pre-baked value. The pattern is still
+stored for AIML reference and generative context downstream.
+
+  base_confidence = token_overlap(connector, attached_node.pattern)
+                  + (attached_node.strength / STRENGTH_CAP) * 0.5
 
 Validation (error-first, NO silent failures):
   - target_id must exist in NODE_MAP and not be grave
@@ -644,6 +659,20 @@ function attach_node!(target_id::String, attach_id::String, pattern::String)::St
     # GRUG: Pre-bake the signal from the user-defined pattern
     attach_signal = words_to_signal(pattern)
 
+    # GRUG: JIT CONFIDENCE BAKING! Compute base_confidence NOW at attach time,
+    # not every fire cycle. This is the core JIT optimization:
+    #   base_confidence = token_overlap(connector_pattern, attached_node.pattern)
+    #                   + (attached_node.strength / STRENGTH_CAP) * 0.5
+    # At fire time, only jitter is applied: max(0.1, base_confidence + jitter).
+    # The connector pattern is still stored for AIML reference — it's just that
+    # the expensive scan happens once here instead of every relay activation.
+    jit_base_confidence = lock(NODE_LOCK) do
+        attach_node_ref = NODE_MAP[attach_id]
+        base_conf = _token_overlap_similarity(pattern, attach_node_ref.pattern)
+        strength_bonus = attach_node_ref.strength / STRENGTH_CAP
+        return base_conf + (strength_bonus * 0.5)
+    end
+
     lock(ATTACHMENT_LOCK) do
         existing = get(ATTACHMENT_MAP, target_id, AttachedNode[])
 
@@ -659,15 +688,15 @@ function attach_node!(target_id::String, attach_id::String, pattern::String)::St
             end
         end
 
-        # GRUG: All checks passed. Bolt it on!
-        new_attachment = AttachedNode(attach_id, pattern, attach_signal)
+        # GRUG: All checks passed. Bolt it on with JIT-baked confidence!
+        new_attachment = AttachedNode(attach_id, pattern, attach_signal, jit_base_confidence)
         push!(existing, new_attachment)
         ATTACHMENT_MAP[target_id] = existing
     end
 
     n_attached = lock(() -> length(get(ATTACHMENT_MAP, target_id, AttachedNode[])), ATTACHMENT_LOCK)
-    println("[ENGINE] 🔗  Node '$attach_id' attached to target '$target_id' with pattern \"$(first(pattern, 40))\" ($n_attached/$MAX_ATTACHMENTS slots used).")
-    return "Attached '$attach_id' to '$target_id' with pattern \"$(first(pattern, 40))\" ($n_attached/$MAX_ATTACHMENTS)"
+    println("[ENGINE] 🔗  Node '$attach_id' attached to target '$target_id' with pattern \"$(first(pattern, 40))\" (base_conf=$(round(jit_base_confidence, digits=3)), $n_attached/$MAX_ATTACHMENTS slots used).")
+    return "Attached '$attach_id' to '$target_id' with pattern \"$(first(pattern, 40))\" (base_conf=$(round(jit_base_confidence, digits=3)), $n_attached/$MAX_ATTACHMENTS)"
 end
 
 """
@@ -713,16 +742,17 @@ their (node_id, confidence, connector_pattern) for voting. Losers are skipped.
 active_count = how many nodes have already fired this scan cycle
 active_cap   = the biological attention bottleneck limit for this cycle
 
-The CONNECTOR PATTERN (middleman) is scanned against the ATTACHED NODE's own
-pattern to determine confidence. This is the core of relational fire:
-  confidence = token_overlap_similarity(connector_pattern, attached_node_pattern)
-             + (attached_node_strength / STRENGTH_CAP) * 0.5
-             + randn() * RELAY_CONF_JITTER_SIGMA  (biological synaptic noise)
+JIT CONFIDENCE BAKING: The expensive token_overlap scan between the connector
+pattern and the attached node's own pattern happens ONCE at attach time (in
+attach_node!), NOT every fire cycle. The pre-baked base_confidence is stored
+in the AttachedNode struct. At fire time, only stochastic jitter is applied:
+  confidence = max(0.1, att.base_confidence + randn() * RELAY_CONF_JITTER_SIGMA)
   Minimum confidence floor of 0.1 so attached nodes always have SOME voice.
   Jitter is small (sigma=0.05) — nudges but never dominates.
 
-The connector pattern is also returned so it can surface downstream as
-generative context — it tells the pipeline WHY these nodes were co-activated.
+The connector pattern is stored for AIML reference and returned so it can
+surface downstream as generative context — it tells the pipeline WHY these
+nodes were co-activated.
 
 Returns: Vector of (node_id, confidence, connector_pattern) triples.
 """
@@ -769,21 +799,18 @@ function fire_attachments!(target_id::String, active_count::Int, active_cap::Int
                 continue
             end
 
-            # GRUG: CONFIDENCE CALCULATION — CONNECTOR PATTERN vs ATTACHED NODE.
-            # The connector pattern (middleman) is scanned against the ATTACHED NODE's
-            # own pattern, NOT the target's. This answers: "how relevant is the relay
-            # reason to the node being woken up?" Strength bonus scales it up.
+            # GRUG: JIT CONFIDENCE — pre-baked at attach time, just apply jitter now!
+            # The expensive token_overlap scan happened once in attach_node! (JIT baking).
+            # At fire time we only add stochastic synaptic jitter (sigma=0.05).
             # Floor of 0.1 so attached nodes always have SOME voice.
             if isempty(att.pattern)
                 error("!!! FATAL: fire_attachments! found empty connector pattern for '$(att.node_id)' on target '$target_id'! Every attachment MUST have a pattern! !!!")
             end
-            base_conf = _token_overlap_similarity(att.pattern, attach_node_ref.pattern)
-            strength_bonus = attach_node_ref.strength / STRENGTH_CAP
             # GRUG: Add small stochastic jitter (sigma=RELAY_CONF_JITTER_SIGMA).
             # Synaptic relay is biologically noisy — same node shouldn't fire with
             # identical confidence every cycle. Nudges vote pool diversity.
             jitter = randn() * RELAY_CONF_JITTER_SIGMA
-            confidence = max(0.1, base_conf + (strength_bonus * 0.5) + jitter)
+            confidence = max(0.1, att.base_confidence + jitter)
 
             # GRUG: Return the connector pattern so generative knows WHY this relay fired.
             push!(fired, (att.node_id, confidence, att.pattern))
@@ -819,7 +846,7 @@ function get_attachment_summary()::String
                     n = get(NODE_MAP, att.node_id, nothing)
                     isnothing(n) ? "[MISSING]" : (n.is_grave ? "[GRAVE]" : "[ALIVE str=$(round(n.strength, digits=1))]")
                 end, NODE_LOCK)
-                push!(lines, "      🔗 $(att.node_id) $node_status | connector=\"$(first(att.pattern, 35))\"")
+                push!(lines, "      🔗 $(att.node_id) $node_status | base_conf=$(round(att.base_confidence, digits=3)) | connector=\"$(first(att.pattern, 35))\"")
             end
         end
     end
@@ -834,6 +861,168 @@ Returns empty vector if no attachments exist.
 """
 function get_attachments_for_target(target_id::String)::Vector{AttachedNode}
     return lock(() -> get(ATTACHMENT_MAP, target_id, AttachedNode[]), ATTACHMENT_LOCK)
+end
+
+# ==============================================================================
+# IMAGE NODE ATTACHMENT (SDF-BASED RELATIONAL FIRE)
+# ==============================================================================
+
+# GRUG: /imgnodeAttach does everything /nodeAttach does but for IMAGE NODES.
+# Instead of text connector patterns, uses image binary converted to nonlinear
+# SDF at attach time (JIT GPU accel). Confidence is baked from SDF signal
+# similarity — the cosine similarity between the connector SDF signal and the
+# attached image node's own SDF signal. Same error-first philosophy, same
+# validation, same AttachedNode struct (pattern stores "SDF:<format>:<w>x<h>"
+# metadata, signal stores the SDF-derived signal vector).
+
+"""
+_sdf_signal_similarity(sig_a::Vector{Float64}, sig_b::Vector{Float64})::Float64
+
+GRUG: Cosine similarity between two SDF-derived signal vectors.
+This is the image-domain equivalent of _token_overlap_similarity for text.
+Returns [0.0, 1.0] — 1.0 means identical SDF activations.
+Errors on empty signals (NO silent failures).
+"""
+function _sdf_signal_similarity(sig_a::Vector{Float64}, sig_b::Vector{Float64})::Float64
+    if isempty(sig_a)
+        error("!!! FATAL: _sdf_signal_similarity got empty sig_a! Image SDF signals must not be empty! !!!")
+    end
+    if isempty(sig_b)
+        error("!!! FATAL: _sdf_signal_similarity got empty sig_b! Image SDF signals must not be empty! !!!")
+    end
+
+    # GRUG: Truncate to the shorter signal length for fair comparison.
+    # SDF signals may differ in length if images have different resolutions.
+    min_len = min(length(sig_a), length(sig_b))
+    a = @view sig_a[1:min_len]
+    b = @view sig_b[1:min_len]
+
+    # GRUG: Cosine similarity = dot(a,b) / (||a|| * ||b||)
+    dot_product = sum(a .* b)
+    norm_a = sqrt(sum(a .^ 2))
+    norm_b = sqrt(sum(b .^ 2))
+
+    # GRUG: If either norm is zero (black image / null signal), similarity is 0.0.
+    if norm_a < 1e-12 || norm_b < 1e-12
+        return 0.0
+    end
+
+    # GRUG: Clamp to [0.0, 1.0] — negative cosine means anti-correlated SDF,
+    # which we treat as zero similarity for confidence purposes.
+    return clamp(dot_product / (norm_a * norm_b), 0.0, 1.0)
+end
+
+"""
+attach_image_node!(target_id::String, attach_id::String, image_data::Vector{UInt8}, width::Int, height::Int)::String
+
+GRUG: Bolt an IMAGE NODE onto a target node with SDF-based relational fire.
+Does everything attach_node! does but for image nodes:
+  1. Validates both nodes exist, are alive, and attach_id IS an image node
+  2. Converts image binary to nonlinear SDF at attach time (JIT GPU accel)
+  3. Computes base_confidence from SDF signal similarity (cosine sim)
+  4. Stores the SDF signal + base_confidence in the AttachedNode struct
+  5. Pattern field stores metadata: "SDF:<format>:<width>x<height>" for AIML ref
+
+JIT GPU ACCEL: The expensive image→SDF conversion + similarity computation
+happens ONCE here at attach time. At fire time, only jitter is applied to
+the pre-baked base_confidence. Same as text JIT baking but with SDF math.
+
+Validation (error-first, NO silent failures):
+  - target_id must exist in NODE_MAP and not be grave
+  - attach_id must exist in NODE_MAP, not be grave, AND must be an image node
+  - target_id ≠ attach_id (no self-attachment)
+  - target cannot already have MAX_ATTACHMENTS (4) attached nodes
+  - attach_id cannot already be attached to this target (no duplicate bolts)
+  - image_data must not be empty
+  - width and height must be > 0
+
+Returns confirmation string on success.
+"""
+function attach_image_node!(target_id::String, attach_id::String, image_data::Vector{UInt8}, width::Int, height::Int)::String
+    if strip(target_id) == ""
+        error("!!! FATAL: attach_image_node! got empty target_id! Grug needs a real target! !!!")
+    end
+    if strip(attach_id) == ""
+        error("!!! FATAL: attach_image_node! got empty attach_id! Grug needs a real node to attach! !!!")
+    end
+    if target_id == attach_id
+        error("!!! FATAL: attach_image_node! target '$target_id' cannot attach to itself! That's a mirror, not a relay! !!!")
+    end
+    if isempty(image_data)
+        error("!!! FATAL: attach_image_node! got empty image_data! Cannot create SDF from nothing! !!!")
+    end
+    if width <= 0 || height <= 0
+        error("!!! FATAL: attach_image_node! got invalid dimensions: $(width)x$(height)! Both must be > 0! !!!")
+    end
+
+    # GRUG: Validate both nodes exist and are alive, and attach_id is an image node
+    lock(NODE_LOCK) do
+        if !haskey(NODE_MAP, target_id)
+            error("!!! FATAL: attach_image_node! target node '$target_id' does not exist on the map! !!!")
+        end
+        if !haskey(NODE_MAP, attach_id)
+            error("!!! FATAL: attach_image_node! attach node '$attach_id' does not exist on the map! !!!")
+        end
+        target_node = NODE_MAP[target_id]
+        attach_node_ref = NODE_MAP[attach_id]
+        if target_node.is_grave
+            error("!!! FATAL: attach_image_node! target node '$target_id' is GRAVE [$(target_node.grave_reason)]! Cannot attach to dead nodes! !!!")
+        end
+        if attach_node_ref.is_grave
+            error("!!! FATAL: attach_image_node! attach node '$attach_id' is GRAVE [$(attach_node_ref.grave_reason)]! Cannot attach dead nodes! !!!")
+        end
+        if !attach_node_ref.is_image_node
+            error("!!! FATAL: attach_image_node! node '$attach_id' is NOT an image node! Use /nodeAttach for text nodes! !!!")
+        end
+    end
+
+    # GRUG: JIT GPU ACCEL — Convert image binary to nonlinear SDF at attach time!
+    # This is the expensive computation that happens ONCE, not every fire cycle.
+    connector_sdf = ImageSDF.image_to_sdf_params(image_data, width, height)
+    connector_signal = ImageSDF.sdf_to_signal(connector_sdf)
+
+    # GRUG: JIT CONFIDENCE BAKING — SDF cosine similarity + strength bonus
+    # Compare connector SDF signal against attached image node's own signal.
+    jit_base_confidence = lock(NODE_LOCK) do
+        attach_node_ref = NODE_MAP[attach_id]
+        # GRUG: Image node signals are already SDF-derived. Compare directly.
+        if isempty(attach_node_ref.signal)
+            # GRUG: Image node with empty signal — use flat baseline confidence
+            return 0.3
+        end
+        sdf_sim = _sdf_signal_similarity(connector_signal, attach_node_ref.signal)
+        strength_bonus = attach_node_ref.strength / STRENGTH_CAP
+        return sdf_sim + (strength_bonus * 0.5)
+    end
+
+    # GRUG: Pattern stores SDF metadata string for AIML reference.
+    # Not a text pattern — this tells downstream "this is an image attachment".
+    sdf_meta_pattern = "SDF:image:$(width)x$(height)"
+
+    lock(ATTACHMENT_LOCK) do
+        existing = get(ATTACHMENT_MAP, target_id, AttachedNode[])
+
+        # GRUG: Check max attachments cap
+        if length(existing) >= MAX_ATTACHMENTS
+            error("!!! FATAL: attach_image_node! target '$target_id' already has $(length(existing)) attachments (max $MAX_ATTACHMENTS)! Detach one first! !!!")
+        end
+
+        # GRUG: Check for duplicate attachment (same node already bolted on)
+        for att in existing
+            if att.node_id == attach_id
+                error("!!! FATAL: attach_image_node! node '$attach_id' is already attached to target '$target_id'! No duplicate bolts! !!!")
+            end
+        end
+
+        # GRUG: All checks passed. Bolt it on with JIT-baked SDF confidence!
+        new_attachment = AttachedNode(attach_id, sdf_meta_pattern, connector_signal, jit_base_confidence)
+        push!(existing, new_attachment)
+        ATTACHMENT_MAP[target_id] = existing
+    end
+
+    n_attached = lock(() -> length(get(ATTACHMENT_MAP, target_id, AttachedNode[])), ATTACHMENT_LOCK)
+    println("[ENGINE] 🖼️🔗  Image node '$attach_id' attached to target '$target_id' via SDF ($(width)x$(height), base_conf=$(round(jit_base_confidence, digits=3)), $n_attached/$MAX_ATTACHMENTS slots used).")
+    return "Attached image '$attach_id' to '$target_id' via SDF ($(width)x$(height), base_conf=$(round(jit_base_confidence, digits=3)), $n_attached/$MAX_ATTACHMENTS)"
 end
 
 # ==============================================================================

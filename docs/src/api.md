@@ -58,24 +58,33 @@ Multi-axis similarity engine with semantic, contextual, and associative dimensio
 
 ## Attachment System (Relational Fire)
 
-The attachment system enables explicit relational firing chains between nodes. It lives in `engine.jl` alongside the core node engine.
+The attachment system enables explicit relational firing chains between nodes. It lives in `engine.jl` alongside the core node engine. Supports both text nodes (`/nodeAttach`) and image nodes (`/imgnodeAttach`).
 
 ### Data Structures
 
-- `AttachedNode` — Immutable struct holding `node_id::String`, `pattern::String` (connector/middleman pattern), `signal::Vector{Float64}` (pre-baked via `words_to_signal`)
+- `AttachedNode` — Immutable struct holding:
+  - `node_id::String` — ID of the attached node
+  - `pattern::String` — Connector/middleman pattern (text) or SDF metadata (`"SDF:image:WxH"` for image attachments)
+  - `signal::Vector{Float64}` — Pre-baked signal (text: via `words_to_signal`; image: via `sdf_to_signal`)
+  - `base_confidence::Float64` — JIT-baked confidence computed at attach time (not at fire time)
 - `ATTACHMENT_MAP` — `Dict{String, Vector{AttachedNode}}` mapping target node IDs to their attached nodes
 - `ATTACHMENT_LOCK` — `ReentrantLock` for thread-safe access
-- `MAX_ATTACHMENTS` — Hard cap of 4 attachments per target
+- `MAX_ATTACHMENTS` — Hard cap of 4 attachments per target (shared between text and image)
+- `RELAY_CONF_JITTER_SIGMA` — `0.05`, stochastic jitter applied at fire time to pre-baked confidence
 
 ### Functions
 
-- `attach_node!(target_id, attach_id, pattern)` — Attach a node to a target with a connector pattern (middleman). The connector pattern represents WHY these nodes are related. When the target fires, the connector pattern is scanned against the **attached node's own pattern** to determine voting confidence. Validates: non-empty arguments, node existence, grave status, self-attach prevention, max cap, duplicate prevention. Pre-bakes the pattern into a signal vector on attach. Returns a human-readable confirmation string.
+- `attach_node!(target_id, attach_id, pattern)` — Attach a text node to a target with a connector pattern (middleman). JIT confidence baking: the connector pattern is scanned against the **attached node's own pattern** at attach time via `_token_overlap_similarity()`, combined with a strength bonus `(strength / STRENGTH_CAP) * 0.5`, and stored as `base_confidence`. The signal is pre-baked via `words_to_signal()`. Validates: non-empty arguments, node existence, grave status, self-attach prevention, max cap, duplicate prevention. Returns a human-readable confirmation string including the baked `base_confidence`.
 
-- `detach_node!(target_id, attach_id)` — Remove a specific attachment. Cleans up the target's entry entirely if no attachments remain. Returns a confirmation string.
+- `attach_image_node!(target_id, attach_id, image_data, width, height)` — Attach an image node to a target with SDF-based relational fire. JIT GPU accel: image binary is converted to nonlinear SDF at attach time via `image_to_sdf_params()`, flattened to a signal via `sdf_to_signal()`, and `base_confidence` is baked from `_sdf_signal_similarity()` (cosine similarity) + strength bonus. The attach node **must** be an image node (`is_image_node=true`). Pattern field stores `"SDF:image:WxH"` metadata. All validations from `attach_node!` apply, plus image-specific checks (non-empty data, valid dimensions, image node requirement).
 
-- `fire_attachments!(target_id, active_count, active_cap)` — Called during Pass 3 of `scan_and_expand()`. For each attached node: checks the active cap gate, verifies the node is alive, runs a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`), scans the connector pattern against the **attached node's own pattern** (not the target's) to compute confidence + strength bonus + small synaptic jitter (`randn() * RELAY_CONF_JITTER_SIGMA`), calls `bump_strength!` on winners. Returns `Vector{Tuple{String, Float64, String}}` of `(node_id, confidence, connector_pattern)` triples. The connector pattern surfaces downstream as a `RelationalTriple("target_id", "relay_attached", connector_pattern)` so the generative pipeline knows WHY the relay fired.
+- `detach_node!(target_id, attach_id)` — Remove a specific attachment (works for both text and image). Cleans up the target's entry entirely if no attachments remain. Returns a confirmation string.
 
-- `get_attachment_summary()` — Returns a formatted string showing every target and its attached nodes with patterns, signal lengths, and slot usage. Used by the `/attachments` CLI command.
+- `fire_attachments!(target_id, active_count, active_cap)` — Called during Pass 3 of `scan_and_expand()`. For each attached node: checks the active cap gate, verifies the node is alive, runs a strength-biased coinflip, then applies **only jitter** to the pre-baked `base_confidence`: `confidence = max(0.1, att.base_confidence + randn() * RELAY_CONF_JITTER_SIGMA)`. Calls `bump_strength!` on winners. Returns `Vector{Tuple{String, Float64, String}}` of `(node_id, confidence, connector_pattern)` triples. The connector pattern surfaces downstream as a `RelationalTriple("target_id", "relay_attached", connector_pattern)`.
+
+- `_sdf_signal_similarity(sig_a, sig_b)` — Cosine similarity between two SDF-derived signal vectors, clamped to `[0.0, 1.0]`. Image-domain equivalent of `_token_overlap_similarity`. Truncates to the shorter signal length. Errors on empty signals.
+
+- `get_attachment_summary()` — Returns a formatted string showing every target and its attached nodes with `base_confidence`, patterns, and slot usage. Used by the `/attachments` CLI command.
 
 - `get_attachments_for_target(target_id)` — Simple accessor returning the `Vector{AttachedNode}` for a given target (empty vector if none).
 

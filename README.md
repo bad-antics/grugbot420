@@ -227,25 +227,45 @@ This ensures upstream entities exist before downstream references (e.g., lobes e
 
 ---
 
-## Relational Fire System (`/nodeAttach`)
+## Relational Fire System (`/nodeAttach` & `/imgnodeAttach`)
 
 The relational fire system lets you wire nodes into explicit firing chains. When a target node fires during `scan_and_expand`, its attached nodes each do a strength-biased coinflip to decide whether they should fire too. Think of it as user-defined relay circuitry overlaid on top of the stochastic scan.
 
-### Attaching Nodes
+### Attaching Text Nodes
 
 ```
 /nodeAttach node_0 node_1 "machine learning" node_2 "gradient descent"
 ```
 
-This attaches `node_1` and `node_2` to `node_0`. The patterns (`"machine learning"`, `"gradient descent"`) are **connector patterns** — middleman reasons that explain WHY these nodes are related to the target. When `node_0` fires:
+This attaches `node_1` and `node_2` to `node_0`. The patterns (`"machine learning"`, `"gradient descent"`) are **connector patterns** — middleman reasons that explain WHY these nodes are related to the target.
 
+### JIT Confidence Baking
+
+Confidence is computed **once at attach time** (JIT), not every fire cycle. When you issue `/nodeAttach`, the engine immediately:
+1. Scans the connector pattern against the **attached node's own pattern** (Jaccard token overlap)
+2. Adds a strength bonus: `(attachment_strength / STRENGTH_CAP) * 0.5`
+3. Stores the result as `base_confidence` in the `AttachedNode` struct
+
+When `node_0` fires:
 1. Each attachment does a **strength-biased coinflip**: `scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`
-2. Winners that pass the coinflip get their connector pattern scanned against their **own pattern** (the attached node's pattern, not the target's). This determines voting confidence:
-   - Base confidence = token overlap similarity between the connector pattern and the **attached node's** pattern
-   - Strength bonus = `(attachment_strength / STRENGTH_CAP) * 0.5`
-   - Final confidence = `max(0.1, base + strength_bonus + randn() * 0.05)` — floor of 0.1 so attachments always have *some* voice; small jitter keeps vote pool diverse across repeated relay fires
+2. Winners use the **pre-baked** `base_confidence` with stochastic jitter: `confidence = max(0.1, base_confidence + randn() * 0.05)` — floor of 0.1 so attachments always have *some* voice; small jitter keeps vote pool diverse
 3. The connector pattern surfaces downstream as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so the generative pipeline knows WHY the relay fired
 4. The **active cap** (biological attention bottleneck, `rand(600:1800)`) is respected — if the relay pass hits the cap, remaining attachments are skipped
+
+### Attaching Image Nodes (`/imgnodeAttach`)
+
+```
+/imgnodeAttach node_0 img_node_1 "data:image/png;base64,iVBOR..." 64 64
+```
+
+Does everything `/nodeAttach` does but for **image nodes**. Instead of text connector patterns, uses image binary converted to **nonlinear SDF** at attach time (JIT GPU accel):
+1. Image binary is detected and decoded from the input (Base64 data URI, hex dump, or raw bytes)
+2. Converted to `SDFParams` via `image_to_sdf_params()` — nonlinear gradient-based signed distance field
+3. Flattened to a signal vector via `sdf_to_signal()` for PatternScanner compatibility
+4. `base_confidence` is baked from **SDF cosine similarity** between the connector signal and the attached image node's own signal, plus strength bonus
+5. The attached node **must** be an image node (`is_image_node=true`); text nodes are rejected with an explicit error
+
+Width and height can be omitted (defaults to 8×8) but should be specified for accurate SDF conversion.
 
 ### Constraints & Validation
 
@@ -253,16 +273,18 @@ This attaches `node_1` and `node_2` to `node_0`. The patterns (`"machine learnin
 - Target and attachment nodes must exist on the map and must not be graves
 - A node cannot attach to itself
 - Duplicate attachments are rejected
-- Patterns support quoted multi-word strings
+- `/nodeAttach`: patterns support quoted multi-word strings
+- `/imgnodeAttach`: attach node must be an image node; image data must not be empty; dimensions must be > 0
 - Every error is explicit — no silent failures
 
 ### Detaching
 
 ```
 /nodeDetach node_0 node_1
+/imgnodeDetach node_0 img_node_1
 ```
 
-Removes `node_1` from `node_0`'s attachment list. If that was the last attachment, the target's entry is cleaned up entirely.
+Removes the attached node from the target's attachment list. `/imgnodeDetach` reuses the same `detach_node!` function — both text and image attachments live in the same `ATTACHMENT_MAP`. If that was the last attachment, the target's entry is cleaned up entirely.
 
 ### Viewing Attachments
 
@@ -270,7 +292,7 @@ Removes `node_1` from `node_0`'s attachment list. If that was the last attachmen
 /attachments
 ```
 
-Prints every target and its attached nodes with patterns, signal vector lengths, and slot usage (`N/4`).
+Prints every target and its attached nodes with `base_confidence`, connector patterns, signal vector lengths, and slot usage (`N/4`).
 
 ### Pipeline Integration (Pass 3)
 
@@ -278,7 +300,7 @@ The attachment relay runs as **Pass 3** in `scan_and_expand()`, after the primar
 
 ### Specimen Persistence
 
-Attachments are fully serialized in `/saveSpecimen` (section 14) and restored in `/loadSpecimen` (section 4.14). Each attachment entry stores `target_id`, `node_id`, `pattern`, and the pre-baked `signal` vector. On load, if the signal vector is missing (backward compatibility), it is re-baked from the pattern via `words_to_signal`.
+Attachments are fully serialized in `/saveSpecimen` (section 14) and restored in `/loadSpecimen` (section 4.14). Each attachment entry stores `target_id`, `node_id`, `pattern`, `signal`, and the JIT-baked `base_confidence`. On load, if `base_confidence` is missing (backward compatibility), it is re-computed: text attachments re-run `_token_overlap_similarity`, image attachments use `_sdf_signal_similarity`, with strength bonus added. If the signal vector is also missing, it is re-baked from the pattern via `words_to_signal`.
 
 ---
 
@@ -344,7 +366,7 @@ julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail
 | File | Role |
 |---|---|
 | `src/Main.jl` | Entry point. CLI loop, memory cave, mission processor, idle manager, specimen persistence. |
-| `src/engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion. |
+| `src/engine.jl` | Core node engine: node creation, scanning, voting, Hopfield cache, drop-table expansion, relational fire (JIT confidence baking, SDF image attachments). |
 | `src/stochastichelper.jl` | `@coinflip` macro and `bias()` helper for weighted probabilistic branching. |
 | `src/patternscanner.jl` | Signal-level pattern matching: `cheap_scan`, `medium_scan`, `high_res_scan`. |
 | `src/Lobe.jl` | Subject-specific node partitions with O(1) reverse index. |

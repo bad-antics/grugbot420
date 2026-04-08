@@ -40,18 +40,29 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 
 ## Attachment Relay (Relational Fire)
 
-The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After the primary scan (Pass 1) and lobe cascade (Pass 2), the engine iterates every node in the expanded set and checks for attachments via `ATTACHMENT_MAP`. Each attached node does a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`). Winners enter the expanded vote set with connector-pattern-derived confidence. The relay has its own independent active cap sample (`rand(600:1800)`) to respect the biological attention bottleneck.
+The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After the primary scan (Pass 1) and lobe cascade (Pass 2), the engine iterates every node in the expanded set and checks for attachments via `ATTACHMENT_MAP`. Each attached node does a strength-biased coinflip (`scan_prob = 0.20 + (strength / STRENGTH_CAP) * 0.70`). Winners enter the expanded vote set with pre-baked confidence plus jitter. The relay has its own independent active cap sample (`rand(600:1800)`) to respect the biological attention bottleneck.
 
-The **connector pattern** (middleman) is the core of the relay system. When node A256 gets co-fired, the connector pattern is scanned against **A256's own pattern** — not the target's. This gives two things: (1) a voting confidence reflecting how relevant the relay reason is to the waking node, and (2) generative context surfaced as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so downstream knows WHY these nodes were co-activated.
+### JIT Confidence Baking
+
+The **connector pattern** (middleman) is the core of the relay system. Confidence is computed **once at attach time** (JIT), not every fire cycle:
+
+1. **Text nodes** (`/nodeAttach`): token overlap similarity between the connector pattern and the **attached node's own pattern** (Jaccard) + strength bonus → stored as `base_confidence`
+2. **Image nodes** (`/imgnodeAttach`): image binary → nonlinear SDF conversion (JIT GPU accel) → cosine similarity between connector SDF signal and attached image node's signal + strength bonus → stored as `base_confidence`
+
+At fire time, only stochastic jitter is applied: `confidence = max(0.1, base_confidence + randn() * 0.05)`. The connector pattern is still stored for AIML reference and surfaces as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so downstream knows WHY these nodes were co-activated.
+
+### Image Attachment (`/imgnodeAttach`)
+
+Image attachments use the same `AttachedNode` struct and `ATTACHMENT_MAP` as text attachments. The key difference is the JIT computation at attach time: image binary is converted to nonlinear SDF parameters via `image_to_sdf_params()`, then flattened to a signal vector via `sdf_to_signal()`. Confidence is derived from `_sdf_signal_similarity()` (cosine similarity) instead of `_token_overlap_similarity()` (Jaccard). The pattern field stores SDF metadata (`"SDF:image:WxH"`) instead of a text connector pattern.
 
 Key properties:
-- Max 4 attachments per target node
+- Max 4 attachments per target node (text + image share the same pool)
 - Coinflip-gated: strong attachments fire more often but weak ones still have a 20% floor
-- Confidence = `max(0.1, token_overlap(connector_pattern, attached_node_pattern) + strength_bonus + randn() * 0.05)` (small synaptic jitter for vote diversity)
-- Connector pattern surfaces as a relay triple for generative context
+- JIT confidence: `base_confidence` baked at attach time, fire applies `max(0.1, base_confidence + randn() * 0.05)` (synaptic jitter for vote diversity)
+- Connector pattern / SDF metadata surfaces as a relay triple for generative context
 - Deduplication: no node appears twice in the expanded set
 - Fired attachments get a `bump_strength!` call (they earned it)
-- Fully serialized in specimen save/load (section 14 / 4.14)
+- Fully serialized in specimen save/load (section 14 / 4.14), with backward compat re-baking
 
 ## PhagyMode (Idle Maintenance Automata)
 

@@ -66,8 +66,10 @@ end
     @test atts[1].node_id == n1
     @test atts[1].pattern == "relay pattern gamma"
     @test length(atts[1].signal) > 0  # Signal pre-baked
+    @test atts[1].base_confidence >= 0.0  # JIT-baked confidence stored
+    @test atts[1].base_confidence <= 2.0  # Sane upper bound (similarity + strength bonus)
 
-    println("  ✓ [1] Basic attach: single node attached successfully")
+    println("  ✓ [1] Basic attach: single node attached successfully (base_conf=$(round(atts[1].base_confidence, digits=3)))")
 end
 
 # ==============================================================================
@@ -374,6 +376,14 @@ end
     n1 = make_node!("zzzzz yyyyy xxxxx"; strength=10.0)
     attach_node!(target, n1, "aaaaa bbbbb ccccc")
 
+    # GRUG: Verify JIT-baked base_confidence — zero token overlap + strength bonus
+    atts = get_attachments_for_target(target)
+    @test length(atts) == 1
+    # No token overlap between "aaaaa bbbbb ccccc" and "zzzzz yyyyy xxxxx"
+    # base_confidence = 0.0 + (10.0/10.0)*0.5 = 0.5 (strength bonus only)
+    @test atts[1].base_confidence >= 0.4   # ~0.5 (strength bonus only)
+    @test atts[1].base_confidence <= 0.6   # Tight bound since we know exact values
+
     fired_confs = Float64[]
     for _ in 1:100
         fired = fire_attachments!(target, 0, 1800)
@@ -387,7 +397,7 @@ end
         @test minimum(fired_confs) >= 0.1  # Floor enforced
     end
 
-    println("  ✓ [15] Confidence floor: all fired confidences >= 0.1 ($(length(fired_confs)) samples)")
+    println("  ✓ [15] Confidence floor: all fired confidences >= 0.1, base_conf=$(round(atts[1].base_confidence, digits=3)) ($(length(fired_confs)) samples)")
 end
 
 # ==============================================================================
@@ -490,6 +500,235 @@ end
     end
 
     println("  ✓ [19] Weak strength: fired $fired_count/10 in short burst (initial prob=20%, drift expected)")
+end
+
+# ==============================================================================
+# 20. JIT CONFIDENCE — Pre-baked at attach time with known patterns
+# ==============================================================================
+@testset "JIT Confidence - Pre-baked at attach time" begin
+    reset_engine!()
+
+    # GRUG: Create nodes with known overlapping patterns for deterministic confidence
+    target = make_node!("hub node central")
+    # Pattern has 2/5 overlap with connector: "alpha beta" overlap with "alpha beta gamma delta epsilon"
+    n1 = make_node!("alpha beta unique words here"; strength=5.0)
+
+    attach_node!(target, n1, "alpha beta gamma delta epsilon")
+
+    atts = get_attachments_for_target(target)
+    @test length(atts) == 1
+
+    # GRUG: Expected base_confidence calculation:
+    #   Jaccard similarity of {"alpha","beta","gamma","delta","epsilon"} vs {"alpha","beta","unique","words","here"}
+    #   intersection = {"alpha","beta"} = 2
+    #   union = {"alpha","beta","gamma","delta","epsilon","unique","words","here"} = 8
+    #   similarity = 2/8 = 0.25
+    #   strength_bonus = (5.0/10.0) * 0.5 = 0.25
+    #   base_confidence = 0.25 + 0.25 = 0.5
+    @test atts[1].base_confidence >= 0.45   # Allow small float tolerance
+    @test atts[1].base_confidence <= 0.55
+
+    println("  ✓ [20] JIT confidence: pre-baked at attach time (base_conf=$(round(atts[1].base_confidence, digits=3)), expected ~0.5)")
+end
+
+# ==============================================================================
+# 21. JIT CONFIDENCE — Fire only applies jitter to pre-baked value
+# ==============================================================================
+@testset "JIT Confidence - Fire applies jitter only" begin
+    reset_engine!()
+
+    # GRUG: Create a scenario with known base_confidence, then verify fire output
+    # is tightly clustered around base_confidence (only jitter sigma=0.05)
+    target = make_node!("hub node central")
+    n1 = make_node!("exact same tokens here now"; strength=10.0)
+
+    # High overlap connector: "exact same tokens" overlaps 3 of 5 with node pattern
+    attach_node!(target, n1, "exact same tokens plus more")
+
+    atts = get_attachments_for_target(target)
+    baked_conf = atts[1].base_confidence
+
+    # Fire many times and collect confidences
+    fired_confs = Float64[]
+    for _ in 1:200
+        fired = fire_attachments!(target, 0, 1800)
+        for (_, conf, _) in fired
+            push!(fired_confs, conf)
+        end
+    end
+
+    if !isempty(fired_confs)
+        # GRUG: All confidences should be close to baked_conf (within jitter range)
+        # Jitter sigma = 0.05, so 99.7% should be within ±0.15 (3σ)
+        # Plus the 0.1 floor clamp
+        for conf in fired_confs
+            @test conf >= 0.1                    # Floor always enforced
+            @test conf <= baked_conf + 0.25      # Generous upper bound (5σ safety)
+        end
+        # Mean should be close to baked_conf (jitter is zero-mean)
+        mean_conf = sum(fired_confs) / length(fired_confs)
+        @test abs(mean_conf - max(0.1, baked_conf)) < 0.1  # Mean within 0.1 of baked
+    end
+
+    println("  ✓ [21] JIT fire: confidences cluster around baked value $(round(baked_conf, digits=3)) ($(length(fired_confs)) samples)")
+end
+
+# ==============================================================================
+# 22. SDF SIGNAL SIMILARITY — Cosine similarity function
+# ==============================================================================
+@testset "SDF Signal Similarity" begin
+    # GRUG: Test the _sdf_signal_similarity function directly
+    # Identical signals = 1.0
+    sig_a = [0.5, 0.3, 0.8, 0.1]
+    sig_b = [0.5, 0.3, 0.8, 0.1]
+    @test _sdf_signal_similarity(sig_a, sig_b) ≈ 1.0 atol=0.001
+
+    # Orthogonal signals — construct truly orthogonal vectors
+    sig_c = [1.0, 0.0]
+    sig_d = [0.0, 1.0]
+    @test _sdf_signal_similarity(sig_c, sig_d) ≈ 0.0 atol=0.001
+
+    # Similar signals — should be high but not 1.0
+    sig_e = [0.5, 0.3, 0.8, 0.1]
+    sig_f = [0.5, 0.3, 0.7, 0.2]
+    sim = _sdf_signal_similarity(sig_e, sig_f)
+    @test sim > 0.9
+    @test sim < 1.0
+
+    # Empty signals — should error
+    @test_throws ErrorException _sdf_signal_similarity(Float64[], sig_a)
+    @test_throws ErrorException _sdf_signal_similarity(sig_a, Float64[])
+
+    # Different lengths — truncates to shorter
+    sig_g = [0.5, 0.3, 0.8]
+    sig_h = [0.5, 0.3, 0.8, 0.1, 0.2]
+    sim2 = _sdf_signal_similarity(sig_g, sig_h)
+    @test sim2 ≈ 1.0 atol=0.001  # First 3 elements are identical
+
+    println("  ✓ [22] SDF signal similarity: identity, orthogonal, partial, error cases all pass")
+end
+
+# ==============================================================================
+# 23. IMAGE NODE ATTACH — Basic SDF attachment
+# ==============================================================================
+@testset "ImgNodeAttach - Basic SDF attach" begin
+    reset_engine!()
+
+    target = make_node!("hub node for images")
+
+    # GRUG: Create an image node manually (is_image_node=true)
+    img_id = lock(NODE_LOCK) do
+        nid = "img_test_$(length(NODE_MAP))"
+        # Create a simple 4x4 grayscale image (16 bytes)
+        img_data = UInt8[128, 64, 192, 255, 0, 100, 200, 50,
+                         128, 64, 192, 255, 0, 100, 200, 50]
+        sdf = ImageSDF.image_to_sdf_params(img_data, 4, 4)
+        sig = ImageSDF.sdf_to_signal(sdf)
+        node = Node(
+            nid, "SDF:image:4x4", sig, "image_action",
+            Dict{String, Any}(), String[], 1.0,
+            RelationalTriple[], String[], Dict{String, Float64}(),
+            5.0, true, String[], false, false, "",
+            Float64[], time(), hash("SDF:image:4x4")
+        )
+        NODE_MAP[nid] = node
+        return nid
+    end
+
+    # GRUG: Attach image node with SDF conversion at attach time
+    img_data = UInt8[128, 64, 192, 255, 0, 100, 200, 50,
+                     128, 64, 192, 255, 0, 100, 200, 50]
+    result = attach_image_node!(target, img_id, img_data, 4, 4)
+
+    @test occursin("Attached image", result)
+    @test occursin(img_id, result)
+    @test occursin("SDF", result)
+
+    atts = get_attachments_for_target(target)
+    @test length(atts) == 1
+    @test atts[1].node_id == img_id
+    @test startswith(atts[1].pattern, "SDF:")            # SDF metadata pattern
+    @test length(atts[1].signal) > 0                     # SDF signal pre-baked
+    @test atts[1].base_confidence >= 0.0                 # Confidence baked
+    @test atts[1].base_confidence <= 2.0                 # Sane upper bound
+
+    println("  ✓ [23] Image attach: SDF-based attachment successful (base_conf=$(round(atts[1].base_confidence, digits=3)))")
+end
+
+# ==============================================================================
+# 24. IMAGE NODE ATTACH — Validation errors
+# ==============================================================================
+@testset "ImgNodeAttach - Validation errors" begin
+    reset_engine!()
+
+    target = make_node!("hub node")
+    text_node = make_node!("this is a text node"; strength=5.0)
+
+    # GRUG: Non-image node should be rejected
+    img_data = UInt8[128, 64, 192, 255]
+    @test_throws ErrorException attach_image_node!(target, text_node, img_data, 2, 2)
+
+    # GRUG: Empty target_id
+    @test_throws ErrorException attach_image_node!("", "fake", img_data, 2, 2)
+
+    # GRUG: Empty attach_id
+    @test_throws ErrorException attach_image_node!(target, "", img_data, 2, 2)
+
+    # GRUG: Self-attach
+    @test_throws ErrorException attach_image_node!(target, target, img_data, 2, 2)
+
+    # GRUG: Empty image data
+    @test_throws ErrorException attach_image_node!(target, text_node, UInt8[], 2, 2)
+
+    # GRUG: Invalid dimensions
+    @test_throws ErrorException attach_image_node!(target, text_node, img_data, 0, 2)
+    @test_throws ErrorException attach_image_node!(target, text_node, img_data, 2, -1)
+
+    # GRUG: Missing nodes
+    @test_throws ErrorException attach_image_node!(target, "nonexistent_node", img_data, 2, 2)
+    @test_throws ErrorException attach_image_node!("nonexistent_target", text_node, img_data, 2, 2)
+
+    println("  ✓ [24] Image attach validation: all error cases caught correctly")
+end
+
+# ==============================================================================
+# 25. IMAGE NODE ATTACH — SDF confidence similarity
+# ==============================================================================
+@testset "ImgNodeAttach - SDF confidence from similarity" begin
+    reset_engine!()
+
+    target = make_node!("hub for sdf confidence test")
+
+    # GRUG: Create an image node with known SDF signal
+    img_data_same = UInt8[128, 64, 192, 255, 0, 100, 200, 50,
+                          128, 64, 192, 255, 0, 100, 200, 50]
+
+    img_id = lock(NODE_LOCK) do
+        nid = "img_conf_$(length(NODE_MAP))"
+        sdf = ImageSDF.image_to_sdf_params(img_data_same, 4, 4)
+        sig = ImageSDF.sdf_to_signal(sdf)
+        node = Node(
+            nid, "SDF:image:4x4", sig, "image_action",
+            Dict{String, Any}(), String[], 1.0,
+            RelationalTriple[], String[], Dict{String, Float64}(),
+            5.0, true, String[], false, false, "",
+            Float64[], time(), hash("SDF:image:4x4")
+        )
+        NODE_MAP[nid] = node
+        return nid
+    end
+
+    # GRUG: Attach with THE SAME image data — SDF similarity should be ~1.0
+    result = attach_image_node!(target, img_id, img_data_same, 4, 4)
+    atts = get_attachments_for_target(target)
+    @test length(atts) == 1
+
+    # Same image → high SDF similarity → high base_confidence
+    # base_confidence = sdf_sim (~1.0) + (5.0/10.0)*0.5 = ~1.25
+    @test atts[1].base_confidence >= 0.8   # High similarity expected
+    @test atts[1].base_confidence <= 1.5   # Upper bound with strength bonus
+
+    println("  ✓ [25] Image SDF confidence: same image attachment has high confidence ($(round(atts[1].base_confidence, digits=3)))")
 end
 
 # ==============================================================================

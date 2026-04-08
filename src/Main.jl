@@ -583,6 +583,8 @@ Thesaurus: /thesaurus <word1> | <word2>        (compare words/concepts dimension
 NegThes  : /negativeThesaurus add|remove|list|check|flush
 Attach   : /nodeAttach <target> <id> <pat> ...  (attach nodes with relational fire patterns)
          : /nodeDetach <target> <id>            (detach a node from target)
+ImgAttach: /imgnodeAttach <tgt> <id> <b64> [w h] (attach image node with SDF-based fire)
+         : /imgnodeDetach <target> <id>         (detach image node from target)
          : /attachments                         (show all node attachments)
 Specimen : /saveSpecimen <filepath>            (save full cave state to compressed file)
          : /loadSpecimen <filepath>            (restore full cave state from compressed file)
@@ -653,8 +655,14 @@ const HELP_MSG = """
 ║  RELATIONAL FIRE (NODE ATTACHMENTS)                          ║
 ║  /nodeAttach <tgt> <id> <pat> ...                            ║
 ║    Attach up to 4 nodes to target with firing patterns       ║
+║    Confidence JIT-baked at attach time (not at fire time)    ║
 ║    Example: /nodeAttach node_0 node_1 "fire pattern"         ║
 ║  /nodeDetach <target> <id>   Detach node from target         ║
+║  /imgnodeAttach <tgt> <id> <b64> [w h]                       ║
+║    Attach image node with SDF-based relational fire          ║
+║    Image→SDF conversion at attach time (JIT GPU accel)       ║
+║    Example: /imgnodeAttach n0 img1 "data:image/png;..." 64 64║
+║  /imgnodeDetach <tgt> <id>   Detach image node from target   ║
 ║  /attachments                Show all attachment map          ║
 ║                                                              ║
 ║  SPECIMEN PERSISTENCE                                        ║
@@ -1066,16 +1074,18 @@ function save_specimen_to_file!(filepath::String)::String
 
     # ── 14. ATTACHMENTS (RELATIONAL FIRE SYSTEM) ──────────────────────────────
     # GRUG: Serialize the ATTACHMENT_MAP. Each target_id maps to a list of
-    # AttachedNode structs (node_id, pattern, signal).
+    # AttachedNode structs (node_id, pattern, signal, base_confidence).
+    # base_confidence is the JIT-baked value computed at attach time.
     attachment_list = Dict{String, Any}[]
     lock(ATTACHMENT_LOCK) do
         for (target_id, attachments) in ATTACHMENT_MAP
             for att in attachments
                 push!(attachment_list, Dict{String, Any}(
-                    "target_id" => target_id,
-                    "node_id"   => att.node_id,
-                    "pattern"   => att.pattern,
-                    "signal"    => att.signal
+                    "target_id"       => target_id,
+                    "node_id"         => att.node_id,
+                    "pattern"         => att.pattern,
+                    "signal"          => att.signal,
+                    "base_confidence" => att.base_confidence
                 ))
             end
         end
@@ -1655,7 +1665,28 @@ function load_specimen_from_file!(filepath::String)::String
                     if isempty(sig)
                         sig = words_to_signal(pat)
                     end
-                    att = AttachedNode(nid, pat, sig)
+                    # GRUG: Re-bake base_confidence if missing from old specimen (backward compat).
+                    # Old specimens didn't store JIT-baked confidence, so we re-compute it.
+                    # If the attached node still exists, use its pattern for similarity.
+                    # Otherwise, use a sensible default of 0.3 (some voice, not dominant).
+                    base_conf = Float64(get(aentry, "base_confidence", -1.0))
+                    if base_conf < 0.0
+                        # GRUG: Backward compat re-bake — compute JIT confidence now
+                        attach_ref = get(NODE_MAP, nid, nothing)
+                        if !isnothing(attach_ref) && !isempty(pat) && !startswith(pat, "SDF:")
+                            base_conf = _token_overlap_similarity(pat, attach_ref.pattern) + (attach_ref.strength / STRENGTH_CAP) * 0.5
+                        elseif !isnothing(attach_ref) && startswith(pat, "SDF:")
+                            # GRUG: Image attachment — use SDF signal similarity if possible
+                            if !isempty(sig) && !isempty(attach_ref.signal)
+                                base_conf = _sdf_signal_similarity(sig, attach_ref.signal) + (attach_ref.strength / STRENGTH_CAP) * 0.5
+                            else
+                                base_conf = 0.3
+                            end
+                        else
+                            base_conf = 0.3
+                        end
+                    end
+                    att = AttachedNode(nid, pat, sig, base_conf)
                     existing = get(ATTACHMENT_MAP, tid, AttachedNode[])
                     push!(existing, att)
                     ATTACHMENT_MAP[tid] = existing
@@ -1925,6 +1956,8 @@ function run_cli()
             # GRUG: Relational fire system commands (node attachment)
             m_nodeattach   = match(r"^/nodeAttach\s+(.+)"s,                              line)
             m_nodedetach   = match(r"^/nodeDetach\s+(\S+)\s+(\S+)\s*$",                  line)
+            m_imgnodeattach = match(r"^/imgnodeAttach\s+(.+)"s,                          line)
+            m_imgnodedetach = match(r"^/imgnodeDetach\s+(\S+)\s+(\S+)\s*$",              line)
             m_attachments  = match(r"^/attachments\s*$",                                 line)
             m_help         = match(r"^/help\s*$",                                       line)
             
@@ -2445,6 +2478,84 @@ function run_cli()
                 result = detach_node!(target_id, attach_id)
                 println("🔓 $result")
                 add_message_to_history!("System", "/nodeDetach: $result", false)
+
+            elseif !isnothing(m_imgnodeattach)
+                # GRUG: /imgnodeAttach <target_id> <attach_id> <image_data_b64> [<width> <height>]
+                # Same as /nodeAttach but for image nodes. Image binary is converted to
+                # nonlinear SDF at attach time (JIT GPU accel). Confidence is baked from
+                # SDF signal similarity. The attach_id MUST be an image node.
+                #
+                # Supported formats:
+                #   /imgnodeAttach target_0 img_node_1 "data:image/png;base64,iVBOR..." 64 64
+                #   /imgnodeAttach target_0 img_node_1 "data:image/png;base64,iVBOR..."
+                #   (if width/height omitted, defaults to 8x8 — user should specify)
+                #
+                # GRUG: Tokenize respecting quoted strings (same as /nodeAttach)
+                raw_args = String(strip(m_imgnodeattach.captures[1]))
+                tokens = String[]
+                remaining = raw_args
+                while !isempty(remaining)
+                    remaining = lstrip(remaining)
+                    isempty(remaining) && break
+                    if remaining[1] == '"'
+                        close_idx = findnext('"', remaining, 2)
+                        if isnothing(close_idx)
+                            error("!!! FATAL: /imgnodeAttach found opening quote with no closing quote! Check your syntax! !!!")
+                        end
+                        push!(tokens, remaining[2:close_idx-1])
+                        remaining = remaining[close_idx+1:end]
+                    else
+                        space_idx = findfirst(isspace, remaining)
+                        if isnothing(space_idx)
+                            push!(tokens, remaining)
+                            remaining = ""
+                        else
+                            push!(tokens, remaining[1:space_idx-1])
+                            remaining = remaining[space_idx+1:end]
+                        end
+                    end
+                end
+
+                if length(tokens) < 3
+                    error("!!! FATAL: /imgnodeAttach needs at least: <target_id> <attach_id> <image_data>. Got $(length(tokens)) token(s)! !!!")
+                end
+
+                target_id = tokens[1]
+                attach_id = tokens[2]
+                image_input = tokens[3]
+
+                # GRUG: Parse optional width/height (default 8x8 if not provided)
+                img_width = length(tokens) >= 4 ? parse(Int, tokens[4]) : 8
+                img_height = length(tokens) >= 5 ? parse(Int, tokens[5]) : 8
+
+                # GRUG: Detect and decode image binary from the input string
+                found, fmt, extracted = ImageSDF.detect_image_binary(image_input)
+                if !found
+                    error("!!! FATAL: /imgnodeAttach could not detect image binary in input! Expected Base64 data URI or hex dump! !!!")
+                end
+
+                # GRUG: Convert extracted image data to raw bytes
+                image_bytes = if fmt == :base64
+                    ImageSDF.base64_to_bytes(extracted)
+                else
+                    # GRUG: For hex/raw formats, convert hex string to bytes
+                    hex_clean = replace(extracted, r"[^A-Fa-f0-9]" => "")
+                    [parse(UInt8, hex_clean[i:i+1], base=16) for i in 1:2:length(hex_clean)-1]
+                end
+
+                result = attach_image_node!(target_id, attach_id, image_bytes, img_width, img_height)
+                println("🖼️🔗 /imgnodeAttach complete:")
+                println("   → $result")
+                add_message_to_history!("System", "/imgnodeAttach: $result", false)
+
+            elseif !isnothing(m_imgnodedetach)
+                # GRUG: /imgnodeDetach <target_id> <attach_id>
+                # Same as /nodeDetach — reuse detach_node! since AttachedNode is universal.
+                target_id = String(strip(m_imgnodedetach.captures[1]))
+                attach_id = String(strip(m_imgnodedetach.captures[2]))
+                result = detach_node!(target_id, attach_id)
+                println("🖼️🔓 $result")
+                add_message_to_history!("System", "/imgnodeDetach: $result", false)
 
             elseif !isnothing(m_attachments)
                 # GRUG: /attachments — show all current node attachments

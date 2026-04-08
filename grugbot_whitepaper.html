@@ -861,42 +861,71 @@ time, share it with others, or restore it later on a different machine.</p>
 &#9562;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9552;&#9565;</code></pre>
 
 <!-- ================================================================ -->
-<h2 id="relational-fire">16.5 Relational Fire System <span class="new-badge">v7.2</span></h2>
+<h2 id="relational-fire">16.5 Relational Fire System <span class="new-badge">v7.3</span></h2>
 
 <p>
 The relational fire system introduces <strong>user-defined relay circuitry</strong> into the node engine.
 Where drop tables provide implicit co-activation (neighbors fire when the primary fires), and lobe
 cascades provide cross-domain propagation (decayed signals hop between connected lobes), the
 attachment system provides <em>explicit, targeted, pattern-carrying relay links</em> between specific nodes.
+Two commands serve this system: <code>/nodeAttach</code> for text nodes and <code>/imgnodeAttach</code>
+for image nodes.
 </p>
 
 <h3>Architecture</h3>
 <p>
-The system is built on four primitives stored in <code>engine.jl</code>:
+The system is built on five primitives stored in <code>engine.jl</code>:
 </p>
 <ul>
-    <li><code>AttachedNode</code> &mdash; immutable struct: <code>node_id::String</code>, <code>pattern::String</code> (connector/middleman pattern), <code>signal::Vector{Float64}</code> (pre-baked via <code>words_to_signal</code>)</li>
+    <li><code>AttachedNode</code> &mdash; immutable struct: <code>node_id::String</code>, <code>pattern::String</code>
+        (connector/middleman pattern or SDF metadata), <code>signal::Vector{Float64}</code> (pre-baked),
+        <code>base_confidence::Float64</code> (JIT-baked at attach time)</li>
     <li><code>ATTACHMENT_MAP</code> &mdash; <code>Dict{String, Vector{AttachedNode}}</code> mapping target node IDs to their attached nodes</li>
     <li><code>ATTACHMENT_LOCK</code> &mdash; <code>ReentrantLock</code> for thread-safe access</li>
-    <li><code>MAX_ATTACHMENTS = 4</code> &mdash; hard cap per target node</li>
+    <li><code>MAX_ATTACHMENTS = 4</code> &mdash; hard cap per target node (shared between text and image attachments)</li>
+    <li><code>RELAY_CONF_JITTER_SIGMA = 0.05</code> &mdash; stochastic jitter applied at fire time to pre-baked confidence</li>
 </ul>
+
+<h3>JIT Confidence Baking</h3>
+<p>
+Confidence is computed <strong>once at attach time</strong> (JIT), not every fire cycle. This is the core
+optimization: the expensive pattern scan or SDF similarity computation happens when the user issues the
+attach command, and the result is stored as <code>base_confidence</code> in the <code>AttachedNode</code> struct.
+At fire time, only stochastic jitter is applied.
+</p>
+<div class="math-section">
+    <strong>Text nodes:</strong><br>
+    <code>base_confidence = token_overlap_similarity(connector_pattern, attached_node.pattern) + (strength / STRENGTH_CAP) &times; 0.5</code><br><br>
+    <strong>Image nodes:</strong><br>
+    <code>base_confidence = sdf_signal_similarity(connector_sdf_signal, attached_node.signal) + (strength / STRENGTH_CAP) &times; 0.5</code><br><br>
+    <strong>At fire time:</strong><br>
+    <code>confidence = max(0.1, base_confidence + randn() &times; RELAY_CONF_JITTER_SIGMA)</code>
+</div>
 
 <h3>Attachment Lifecycle</h3>
 <p>
-<strong>Attach:</strong> <code>/nodeAttach <target> <id1> <pattern1> [<id2> <pattern2> ...]</code>
+<strong>Text Attach:</strong> <code>/nodeAttach <target> <id1> <pattern1> [<id2> <pattern2> ...]</code>
+</p>
+<p>
+<strong>Image Attach:</strong> <code>/imgnodeAttach <target> <id> <image_data_b64> [width height]</code>
 </p>
 <p>
 Validation is exhaustive and non-silent: empty arguments, node existence, grave status, self-attach
-prevention, max cap enforcement, and duplicate rejection all produce explicit error messages. The
-pattern is pre-baked into a signal vector at attach time so no allocation occurs during the hot scan path.
+prevention, max cap enforcement, and duplicate rejection all produce explicit error messages. For text
+attachments, the pattern is pre-baked into a signal vector and base_confidence via token overlap. For
+image attachments, the image binary is converted to nonlinear SDF at attach time (JIT GPU accel) and
+base_confidence is baked from SDF cosine similarity. The attach node must be an image node
+(<code>is_image_node=true</code>).
 </p>
 <p>
-<strong>Detach:</strong> <code>/nodeDetach <target> <attach_id></code> removes a specific attachment. If that was
-the last attachment on the target, the entry is cleaned up entirely.
+<strong>Detach:</strong> <code>/nodeDetach <target> <attach_id></code> or
+<code>/imgnodeDetach <target> <attach_id></code> removes a specific attachment. Both reuse the
+same <code>detach_node!</code> function. If that was the last attachment on the target, the entry is
+cleaned up entirely.
 </p>
 <p>
-<strong>Inspect:</strong> <code>/attachments</code> prints every target and its attached nodes with patterns, signal
-vector lengths, and slot usage (N/4).
+<strong>Inspect:</strong> <code>/attachments</code> prints every target and its attached nodes with
+<code>base_confidence</code>, connector patterns / SDF metadata, and slot usage (N/4).
 </p>
 
 <h3>Firing Mechanics (Pass 3 of scan_and_expand)</h3>
@@ -914,34 +943,38 @@ checks <code>ATTACHMENT_MAP</code> for attached nodes. Each attachment goes thro
         Strong attachments fire more often. Weak ones still have a 20% floor.</li>
 </ol>
 <p>
-Winners that pass all three gates get their <strong>connector pattern</strong> (middleman) scanned against the
-<strong>attached node's own pattern</strong> &mdash; not the target's. The connector pattern represents WHY
-these nodes are related. Confidence is determined by how well the relay reason matches the
-waking node:
-</p>
-<div class="math-section">
-    <code>base_conf = token_overlap_similarity(connector_pattern, attached_node_pattern)</code><br>
-    <code>strength_bonus = attachment_strength / STRENGTH_CAP &times; 0.5</code><br>
-    <code>jitter = randn() &times; RELAY_CONF_JITTER_SIGMA &nbsp;&nbsp;(sigma = 0.05)</code><br>
-    <code>confidence = max(0.1, base_conf + strength_bonus + jitter)</code>
-</div>
-<p>
-The confidence floor of 0.1 ensures that attached nodes always have <em>some</em> voice in the quorum,
-even if the pattern overlap is minimal. The small stochastic jitter (sigma=0.05) is biologically
-motivated &mdash; synaptic relay is inherently noisy, and the same attached node should not fire
-with identical confidence every cycle. This nudges vote pool diversity without dominating the
-signal. The connector pattern also surfaces downstream as a
+Winners that pass all three gates use their <strong>pre-baked <code>base_confidence</code></strong> with small
+stochastic jitter applied. The confidence floor of 0.1 ensures that attached nodes always have
+<em>some</em> voice in the quorum. The jitter (sigma=0.05) is biologically motivated &mdash; synaptic
+relay is inherently noisy. The connector pattern surfaces downstream as a
 <code>RelationalTriple(target_id, "relay_attached", connector_pattern)</code> so the generative pipeline
 knows WHY the relay fired. Fired attachments receive a <code>bump_strength!</code> call &mdash;
 they earned usage credit. Deduplication ensures no node appears twice in the expanded set.
 </p>
 
+<h3>Image Attachment SDF Pipeline</h3>
+<p>
+<code>/imgnodeAttach</code> uses the <code>ImageSDF</code> module for JIT GPU-accelerated image processing:
+</p>
+<ol>
+    <li>Image binary is detected from the input via regex-based format detection (Base64, hex, raw)</li>
+    <li>Raw bytes are converted to <code>SDFParams</code> via <code>image_to_sdf_params()</code> &mdash;
+        nonlinear gradient-based signed distance field with edge-emphasized, flat-suppressed activations</li>
+    <li>SDFParams are flattened to a signal vector via <code>sdf_to_signal()</code> (uniform subsampling, max 256 pixels)</li>
+    <li><code>base_confidence</code> is computed from cosine similarity (<code>_sdf_signal_similarity()</code>)
+        between the connector SDF signal and the attached image node&rsquo;s own signal, plus strength bonus</li>
+    <li>Pattern field stores <code>"SDF:image:WxH"</code> metadata for downstream reference</li>
+</ol>
+
 <h3>Specimen Persistence</h3>
 <p>
 Attachments are fully serialized as section 14 of <code>/saveSpecimen</code> and restored as section 4.14
 of <code>/loadSpecimen</code>. Each entry stores <code>target_id</code>, <code>node_id</code>,
-<code>pattern</code>, and the pre-baked <code>signal</code> vector. On load, if the signal vector is missing
-(backward compatibility with older specimens), it is re-baked from the pattern via <code>words_to_signal</code>.
+<code>pattern</code>, <code>signal</code>, and <code>base_confidence</code>. On load, if
+<code>base_confidence</code> is missing (backward compatibility with older specimens), it is re-computed:
+text attachments re-run <code>_token_overlap_similarity</code>, image attachments use
+<code>_sdf_signal_similarity</code>, both with strength bonus. If the signal vector is also missing,
+it is re-baked from the pattern via <code>words_to_signal</code>.
 </p>
 
 <h3>Design Rationale</h3>
@@ -949,9 +982,12 @@ of <code>/loadSpecimen</code>. Each entry stores <code>target_id</code>, <code>n
 The attachment system is the explicit counterpart to the engine's implicit co-activation mechanisms.
 Drop tables discover neighbors through seeding; lobe cascades propagate through connectivity. Attachments
 let the architect declare: <em>"when this node fires, give these specific nodes a chance to contribute
-with this specific framing."</em> The coinflip gate ensures that explicit wiring does not bypass the
-stochastic selection pressure that keeps the system honest. The biological parallel is pre-wired axonal
-pathways &mdash; genetically encoded relay circuits that still require synaptic gating to fire.
+with this specific framing."</em> JIT confidence baking ensures that the expensive similarity computation
+happens once at configuration time, not in the hot scan path. The coinflip gate ensures that explicit
+wiring does not bypass the stochastic selection pressure that keeps the system honest. The biological
+parallel is pre-wired axonal pathways &mdash; genetically encoded relay circuits that still require
+synaptic gating to fire. Image attachments extend this to visual representations via nonlinear SDF,
+bridging the gap between text-based pattern nodes and image-based perceptual nodes.
 </p>
 
 <!-- ================================================================ -->
