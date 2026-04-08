@@ -548,6 +548,263 @@ function _token_overlap_similarity(p1::String, p2::String)::Float64
 end
 
 # ==============================================================================
+# RELATIONAL FIRE SYSTEM (NODE ATTACHMENTS)
+# ==============================================================================
+
+# GRUG: /nodeAttach lets user bolt up to 4 nodes onto a target node.
+# When the target fires (selected for voting), each attached node does a
+# strength-biased coinflip. Winners fire too — their user-defined pattern
+# determines confidence when they vote. This is RELATIONAL FIRE: nodes
+# ride on the coattails of a parent node's activation, gated by coinflip
+# and the biological attention bottleneck (active_cap).
+#
+# GRUG: Attachment ≠ Neighbor linking. Neighbors are symmetric co-activation
+# via drop tables. Attachments are ASYMMETRIC: target fires → attached MAY fire.
+# Attached nodes don't cause the target to fire. One-way dependency chain.
+
+struct AttachedNode
+    node_id::String          # GRUG: ID of the node being attached (must exist in NODE_MAP)
+    pattern::String          # GRUG: User-defined pattern — determines confidence when voting
+    signal::Vector{Float64}  # GRUG: Pre-baked signal from pattern (for PatternScanner compat)
+end
+
+# GRUG: Map from target_node_id -> Vector of AttachedNode (max MAX_ATTACHMENTS each)
+const ATTACHMENT_MAP  = Dict{String, Vector{AttachedNode}}()
+const ATTACHMENT_LOCK = ReentrantLock()
+
+# GRUG: Hard cap on how many nodes can be bolted onto one target. User said 4.
+const MAX_ATTACHMENTS = 4
+
+"""
+attach_node!(target_id::String, attach_id::String, pattern::String)::String
+
+GRUG: Bolt a node onto a target node with a user-defined pattern.
+When target fires, attached node does a coinflip to decide if it fires too.
+The pattern determines the attached node's confidence when voting.
+
+Validation (error-first, NO silent failures):
+  - target_id must exist in NODE_MAP and not be grave
+  - attach_id must exist in NODE_MAP and not be grave
+  - target_id ≠ attach_id (no self-attachment, that's a mirror not a relay)
+  - target cannot already have MAX_ATTACHMENTS (4) attached nodes
+  - attach_id cannot already be attached to this target (no duplicate bolts)
+  - pattern must not be empty
+  
+Returns confirmation string on success.
+"""
+function attach_node!(target_id::String, attach_id::String, pattern::String)::String
+    if strip(target_id) == ""
+        error("!!! FATAL: attach_node! got empty target_id! Grug needs a real target! !!!")
+    end
+    if strip(attach_id) == ""
+        error("!!! FATAL: attach_node! got empty attach_id! Grug needs a real node to attach! !!!")
+    end
+    if strip(pattern) == ""
+        error("!!! FATAL: attach_node! got empty pattern for node '$attach_id'! Every attachment needs a pattern! !!!")
+    end
+    if target_id == attach_id
+        error("!!! FATAL: attach_node! target '$target_id' cannot attach to itself! That's a mirror, not a relay! !!!")
+    end
+
+    # GRUG: Validate both nodes exist and are alive
+    lock(NODE_LOCK) do
+        if !haskey(NODE_MAP, target_id)
+            error("!!! FATAL: attach_node! target node '$target_id' does not exist on the map! !!!")
+        end
+        if !haskey(NODE_MAP, attach_id)
+            error("!!! FATAL: attach_node! attach node '$attach_id' does not exist on the map! !!!")
+        end
+        target_node = NODE_MAP[target_id]
+        attach_node_ref = NODE_MAP[attach_id]
+        if target_node.is_grave
+            error("!!! FATAL: attach_node! target node '$target_id' is GRAVE [$(target_node.grave_reason)]! Cannot attach to dead nodes! !!!")
+        end
+        if attach_node_ref.is_grave
+            error("!!! FATAL: attach_node! attach node '$attach_id' is GRAVE [$(attach_node_ref.grave_reason)]! Cannot attach dead nodes! !!!")
+        end
+    end
+
+    # GRUG: Pre-bake the signal from the user-defined pattern
+    attach_signal = words_to_signal(pattern)
+
+    lock(ATTACHMENT_LOCK) do
+        existing = get(ATTACHMENT_MAP, target_id, AttachedNode[])
+
+        # GRUG: Check max attachments cap
+        if length(existing) >= MAX_ATTACHMENTS
+            error("!!! FATAL: attach_node! target '$target_id' already has $(length(existing)) attachments (max $MAX_ATTACHMENTS)! Detach one first! !!!")
+        end
+
+        # GRUG: Check for duplicate attachment (same node already bolted on)
+        for att in existing
+            if att.node_id == attach_id
+                error("!!! FATAL: attach_node! node '$attach_id' is already attached to target '$target_id'! No duplicate bolts! !!!")
+            end
+        end
+
+        # GRUG: All checks passed. Bolt it on!
+        new_attachment = AttachedNode(attach_id, pattern, attach_signal)
+        push!(existing, new_attachment)
+        ATTACHMENT_MAP[target_id] = existing
+    end
+
+    n_attached = lock(() -> length(get(ATTACHMENT_MAP, target_id, AttachedNode[])), ATTACHMENT_LOCK)
+    println("[ENGINE] 🔗  Node '$attach_id' attached to target '$target_id' with pattern \"$(first(pattern, 40))\" ($n_attached/$MAX_ATTACHMENTS slots used).")
+    return "Attached '$attach_id' to '$target_id' with pattern \"$(first(pattern, 40))\" ($n_attached/$MAX_ATTACHMENTS)"
+end
+
+"""
+detach_node!(target_id::String, attach_id::String)::String
+
+GRUG: Remove a specific attached node from a target. Unbolt one relay.
+Returns confirmation string. Errors if target or attachment not found.
+"""
+function detach_node!(target_id::String, attach_id::String)::String
+    if strip(target_id) == ""
+        error("!!! FATAL: detach_node! got empty target_id! !!!")
+    end
+    if strip(attach_id) == ""
+        error("!!! FATAL: detach_node! got empty attach_id! !!!")
+    end
+
+    lock(ATTACHMENT_LOCK) do
+        if !haskey(ATTACHMENT_MAP, target_id)
+            error("!!! FATAL: detach_node! target '$target_id' has no attachments! Nothing to detach! !!!")
+        end
+        existing = ATTACHMENT_MAP[target_id]
+        idx = findfirst(a -> a.node_id == attach_id, existing)
+        if isnothing(idx)
+            error("!!! FATAL: detach_node! node '$attach_id' is not attached to target '$target_id'! !!!")
+        end
+        deleteat!(existing, idx)
+        if isempty(existing)
+            delete!(ATTACHMENT_MAP, target_id)
+        end
+    end
+
+    println("[ENGINE] 🔓  Node '$attach_id' detached from target '$target_id'.")
+    return "Detached '$attach_id' from '$target_id'"
+end
+
+"""
+fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64}}
+
+GRUG: RELATIONAL FIRE! When a target node fires, check its attachments.
+Each attached node does a strength-biased coinflip. Winners fire and return
+their (node_id, confidence) for voting. Losers are silently skipped.
+
+active_count = how many nodes have already fired this scan cycle
+active_cap   = the biological attention bottleneck limit for this cycle
+
+Returned confidence is computed from the attached node's user-defined pattern:
+  confidence = token_overlap_similarity(attached_pattern, target_node_pattern)
+  * strength_bonus  (attached node's strength / STRENGTH_CAP)
+  Minimum confidence floor of 0.1 so attached nodes always have SOME voice.
+
+Returns: Vector of (node_id, confidence) pairs for nodes that won the coinflip.
+"""
+function fire_attachments!(target_id::String, active_count::Int, active_cap::Int)::Vector{Tuple{String, Float64}}
+    fired = Tuple{String, Float64}[]
+
+    attachments = lock(() -> get(ATTACHMENT_MAP, target_id, AttachedNode[]), ATTACHMENT_LOCK)
+    if isempty(attachments)
+        return fired
+    end
+
+    lock(NODE_LOCK) do
+        # GRUG: Get target node's pattern for similarity scoring
+        target_node = get(NODE_MAP, target_id, nothing)
+        if isnothing(target_node)
+            # GRUG: Target vanished between scan and fire. Non-fatal, just skip.
+            @warn "[ENGINE] ⚠ fire_attachments!: target '$target_id' vanished from NODE_MAP."
+            return
+        end
+
+        current_active = active_count
+
+        for att in attachments
+            # GRUG: ACTIVE CAP GATE! If we're at the biological attention limit, stop firing.
+            if current_active >= active_cap
+                println("[ENGINE] 🧠  Attachment relay halted for '$target_id' — active cap ($active_cap) reached.")
+                break
+            end
+
+            # GRUG: Check attached node still exists and is alive
+            attach_node_ref = get(NODE_MAP, att.node_id, nothing)
+            if isnothing(attach_node_ref)
+                # GRUG: Attached node was deleted/graved. Stale attachment. Skip silently.
+                continue
+            end
+            if attach_node_ref.is_grave
+                # GRUG: Dead nodes don't fire. Skip.
+                continue
+            end
+
+            # GRUG: STRENGTH-BIASED COINFLIP! Same formula as scan coinflip.
+            # Strong attached nodes fire more often. Weak ones still have a chance.
+            if !strength_biased_scan_coinflip(attach_node_ref)
+                # GRUG: Lost the coinflip. This attached node stays dormant this round.
+                continue
+            end
+
+            # GRUG: CONFIDENCE CALCULATION from user-defined pattern.
+            # Base confidence = token overlap between attached pattern and target pattern.
+            # Strength bonus scales it up. Floor of 0.1 so attached nodes always have voice.
+            base_conf = _token_overlap_similarity(att.pattern, target_node.pattern)
+            strength_bonus = attach_node_ref.strength / STRENGTH_CAP
+            confidence = max(0.1, base_conf + (strength_bonus * 0.5))
+
+            push!(fired, (att.node_id, confidence))
+            current_active += 1
+
+            # GRUG: Bump strength on the attached node (it got used!)
+            bump_strength!(attach_node_ref)
+
+            println("[ENGINE] ⚡  Attachment relay: '$(att.node_id)' fired via target '$target_id' (conf=$(round(confidence, digits=3))).")
+        end
+    end
+
+    return fired
+end
+
+"""
+get_attachment_summary()::String
+
+GRUG: Return human-readable summary of all node attachments for /nodes or /status.
+"""
+function get_attachment_summary()::String
+    lines = String[]
+    lock(ATTACHMENT_LOCK) do
+        if isempty(ATTACHMENT_MAP)
+            push!(lines, "[ATTACHMENT MAP EMPTY]")
+            return
+        end
+        push!(lines, "=== ATTACHMENT MAP ($(length(ATTACHMENT_MAP)) targets with attachments) ===")
+        for (target_id, attachments) in sort(collect(ATTACHMENT_MAP), by=x->x[1])
+            push!(lines, "  🎯 $target_id ($(length(attachments))/$MAX_ATTACHMENTS attached):")
+            for att in attachments
+                node_status = lock(() -> begin
+                    n = get(NODE_MAP, att.node_id, nothing)
+                    isnothing(n) ? "[MISSING]" : (n.is_grave ? "[GRAVE]" : "[ALIVE str=$(round(n.strength, digits=1))]")
+                end, NODE_LOCK)
+                push!(lines, "      🔗 $(att.node_id) $node_status | pattern=\"$(first(att.pattern, 35))\"")
+            end
+        end
+    end
+    return join(lines, "\n")
+end
+
+"""
+get_attachments_for_target(target_id::String)::Vector{AttachedNode}
+
+GRUG: Get the list of attachments for a specific target node.
+Returns empty vector if no attachments exist.
+"""
+function get_attachments_for_target(target_id::String)::Vector{AttachedNode}
+    return lock(() -> get(ATTACHMENT_MAP, target_id, AttachedNode[]), ATTACHMENT_LOCK)
+end
+
+# ==============================================================================
 # THROTTLE RESET
 # ==============================================================================
 
@@ -1195,6 +1452,34 @@ function scan_and_expand(input_text::String)::Vector{Tuple{String, Float64, Bool
                 end
             end
         end
+    end
+
+    # ── PASS 3: Attachment relay (relational fire system, coinflip-gated) ──────
+    # GRUG: For every node that made it into the expanded set, check if it has
+    # attachments. If so, fire_attachments! runs a strength-biased coinflip on
+    # each attached node. Winners get added to the expanded set with their own
+    # pattern-derived confidence. active_cap is sampled once here for the relay
+    # pass so attachment firing respects the biological attention bottleneck.
+    relay_cap = rand(600:1800)  # GRUG: Independent cap for relay pass
+    relay_count = length(expanded)
+    relay_additions = Tuple{String, Float64, Bool, Vector{RelationalTriple}, Vector{RelationalTriple}}[]
+
+    for (id, conf, antimatch, u_trips, n_trips) in expanded
+        fired_pairs = fire_attachments!(id, relay_count, relay_cap)
+        for (fired_id, fired_conf) in fired_pairs
+            if !(fired_id in already_included)
+                fired_node = lock(() -> get(NODE_MAP, fired_id, nothing), NODE_LOCK)
+                isnothing(fired_node) && continue
+                push!(relay_additions, (fired_id, fired_conf, false, user_triples, fired_node.relational_patterns))
+                push!(already_included, fired_id)
+                relay_count += 1
+            end
+        end
+    end
+
+    if !isempty(relay_additions)
+        append!(expanded, relay_additions)
+        println("[ENGINE] 🔗  Attachment relay pass added $(length(relay_additions)) node(s) to expanded set.")
     end
 
     return expanded

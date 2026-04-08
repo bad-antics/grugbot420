@@ -580,6 +580,9 @@ Lobes    : /newLobe <id> <subject>             (create a new subject lobe)
 Thesaurus: /thesaurus <word1> | <word2>        (compare words/concepts dimensionally)
          : /thesaurus <w1> | <w2> :: <ctx1> :: <ctx2>  (with context lists)
 NegThes  : /negativeThesaurus add|remove|list|check|flush
+Attach   : /nodeAttach <target> <id> <pat> ...  (attach nodes with relational fire patterns)
+         : /nodeDetach <target> <id>            (detach a node from target)
+         : /attachments                         (show all node attachments)
 Specimen : /saveSpecimen <filepath>            (save full cave state to compressed file)
          : /loadSpecimen <filepath>            (restore full cave state from compressed file)
 Help     : /help                               (full command reference)
@@ -646,12 +649,19 @@ const HELP_MSG = """
 ║  /negativeThesaurus check <word>                            ║
 ║  /negativeThesaurus flush                                   ║
 ║                                                              ║
+║  RELATIONAL FIRE (NODE ATTACHMENTS)                          ║
+║  /nodeAttach <tgt> <id> <pat> ...                            ║
+║    Attach up to 4 nodes to target with firing patterns       ║
+║    Example: /nodeAttach node_0 node_1 "fire pattern"         ║
+║  /nodeDetach <target> <id>   Detach node from target         ║
+║  /attachments                Show all attachment map          ║
+║                                                              ║
 ║  SPECIMEN PERSISTENCE                                        ║
 ║  /saveSpecimen <filepath>    Save full cave to compressed gz ║
 ║  /loadSpecimen <filepath>    Restore full cave from gz file  ║
 ║    Saves/restores: nodes, lobes, lobe tables, Hopfield,     ║
 ║    rules, messages+pins, verbs, thesaurus, inhibitions,     ║
-║    arousal, ID counters, brainstem state                    ║
+║    arousal, ID counters, brainstem state, attachments        ║
 ║                                                              ║
 ║  /help                      Show this scroll                ║
 ╚══════════════════════════════════════════════════════════════╝
@@ -1053,6 +1063,24 @@ function save_specimen_to_file!(filepath::String)::String
     end
     specimen["brainstem"] = brainstem_data
 
+    # ── 14. ATTACHMENTS (RELATIONAL FIRE SYSTEM) ──────────────────────────────
+    # GRUG: Serialize the ATTACHMENT_MAP. Each target_id maps to a list of
+    # AttachedNode structs (node_id, pattern, signal).
+    attachment_list = Dict{String, Any}[]
+    lock(ATTACHMENT_LOCK) do
+        for (target_id, attachments) in ATTACHMENT_MAP
+            for att in attachments
+                push!(attachment_list, Dict{String, Any}(
+                    "target_id" => target_id,
+                    "node_id"   => att.node_id,
+                    "pattern"   => att.pattern,
+                    "signal"    => att.signal
+                ))
+            end
+        end
+    end
+    specimen["attachments"] = attachment_list
+
     # ── METADATA ──────────────────────────────────────────────────────────
     specimen["_meta"] = Dict{String, Any}(
         "version"    => "2.0",
@@ -1101,6 +1129,7 @@ function save_specimen_to_file!(filepath::String)::String
     push!(lines, "  🔧  Verb classes     : $(length(get(verb_data, "classes", Dict())))")
     push!(lines, "  🔤  Thesaurus words  : $(length(thesaurus_data))")
     push!(lines, "  🚫  Inhibitions      : $(length(inhib_list))")
+    push!(lines, "  🔗  Attachments      : $(length(attachment_list))")
     push!(lines, "  👁   Arousal          : $(arousal_data["level"])")
     push!(lines, "╚══════════════════════════════════════════════════════════════╝")
     return join(lines, "\n")
@@ -1178,7 +1207,7 @@ function load_specimen_from_file!(filepath::String)::String
     allowed_keys = Set(["nodes", "hopfield_cache", "rules", "message_history",
                         "lobes", "node_to_lobe_idx", "lobe_tables",
                         "verb_registry", "thesaurus_seeds", "inhibitions",
-                        "arousal", "id_counters", "brainstem", "_meta"])
+                        "arousal", "id_counters", "brainstem", "attachments", "_meta"])
     for key in keys(specimen)
         if !(key in allowed_keys)
             push!(validation_errors, "Unknown top-level key '$key'")
@@ -1281,6 +1310,11 @@ function load_specimen_from_file!(filepath::String)::String
     # Wipe last voter IDs
     lock(LAST_VOTER_LOCK) do
         empty!(LAST_VOTER_IDS)
+    end
+
+    # Wipe attachments (relational fire system)
+    lock(ATTACHMENT_LOCK) do
+        empty!(ATTACHMENT_MAP)
     end
 
     println("  ✅ Cave wiped clean. Beginning restore...")
@@ -1605,6 +1639,35 @@ function load_specimen_from_file!(filepath::String)::String
         println("  🧬 BrainStem state restored")
     end
 
+
+    # ── 4.14 ATTACHMENTS (RELATIONAL FIRE SYSTEM) ────────────────────────────
+    n_attachments = 0
+    if haskey(specimen, "attachments") && isa(specimen["attachments"], AbstractVector)
+        lock(ATTACHMENT_LOCK) do
+            for aentry in specimen["attachments"]
+                try
+                    tid  = String(aentry["target_id"])
+                    nid  = String(aentry["node_id"])
+                    pat  = String(aentry["pattern"])
+                    sig  = Float64.(get(aentry, "signal", Float64[]))
+                    # GRUG: Re-bake signal if missing from file (backward compat)
+                    if isempty(sig)
+                        sig = words_to_signal(pat)
+                    end
+                    att = AttachedNode(nid, pat, sig)
+                    existing = get(ATTACHMENT_MAP, tid, AttachedNode[])
+                    push!(existing, att)
+                    ATTACHMENT_MAP[tid] = existing
+                    n_attachments += 1
+                catch e
+                    @warn "loadSpecimen: skipping bad attachment entry: $e"
+                end
+            end
+        end
+        counts["attachments"] = n_attachments
+        println("  🔗 Attachments restored ($n_attachments)")
+    end
+
     # ══════════════════════════════════════════════════════════════════════
     # PHASE 5: BUILD SUMMARY SCROLL
     # ══════════════════════════════════════════════════════════════════════
@@ -1631,6 +1694,7 @@ function load_specimen_from_file!(filepath::String)::String
     push!(lines, "  🔧  Verb classes     : $(get(counts, "verb_classes", 0)) ($(get(counts, "verbs", 0)) verbs)")
     push!(lines, "  🔤  Thesaurus words  : $(get(counts, "thesaurus_words", 0))")
     push!(lines, "  🚫  Inhibitions      : $(get(counts, "inhibitions", 0))")
+    push!(lines, "  🔗  Attachments      : $(get(counts, \"attachments\", 0))")
     push!(lines, "  👁   Arousal          : $(EyeSystem.get_arousal())")
     push!(lines, "  🔢  ID counters      : node=$(ID_COUNTER[]), msg=$(MSG_ID_COUNTER[])")
     push!(lines, "  ─────────────────────────────────────────────")
@@ -1855,6 +1919,10 @@ function run_cli()
             # GRUG: Help command — show all commands
             m_loadspecimen = match(r"^/loadSpecimen\s+(\S+)\s*$",                          line)
             m_savespecimen = match(r"^/saveSpecimen\s+(\S+)\s*$",                          line)
+            # GRUG: Relational fire system commands (node attachment)
+            m_nodeattach   = match(r"^/nodeAttach\s+(.+)"s,                              line)
+            m_nodedetach   = match(r"^/nodeDetach\s+(\S+)\s+(\S+)\s*$",                  line)
+            m_attachments  = match(r"^/attachments\s*$",                                 line)
             m_help         = match(r"^/help\s*$",                                       line)
             
             if !isnothing(m_help)
@@ -1930,6 +1998,11 @@ function run_cli()
             elseif !isnothing(m_nodes)
                 # GRUG: /nodes - show full node map status (strength, neighbors, graves, etc.)
                 println(get_node_status_summary())
+                # GRUG: Also show attachment map if any attachments exist
+                att_summary = get_attachment_summary()
+                if !contains(att_summary, "EMPTY")
+                    println("\n$att_summary")
+                end
 
             elseif !isnothing(m_status)
                 # GRUG: /status - comprehensive system health snapshot.
@@ -2289,6 +2362,91 @@ function run_cli()
                 result_summary = load_specimen_from_file!(spec_path)
                 println("\n$result_summary")
                 add_message_to_history!("System", result_summary, false)
+
+            elseif !isnothing(m_nodeattach)
+                # GRUG: /nodeAttach <target_id> <attach_id1> <pattern1> [<attach_id2> <pattern2> ...]
+                # Relational fire system: bolt nodes onto a target with user-defined patterns.
+                # Parsing: target_id is first token. Remaining tokens alternate between
+                # node_id and quoted/unquoted pattern. Each pair is one attachment.
+                #
+                # Supported formats:
+                #   /nodeAttach target_0 node_1 "hello world" node_2 "fire pattern"
+                #   /nodeAttach target_0 node_1 hello node_2 fire
+                #
+                # GRUG: Use a regex to extract pairs of (node_id, pattern) after target_id.
+                raw_args = String(strip(m_nodeattach.captures[1]))
+                
+                # GRUG: Tokenize respecting quoted strings
+                tokens = String[]
+                remaining = raw_args
+                while !isempty(remaining)
+                    remaining = lstrip(remaining)
+                    isempty(remaining) && break
+                    if remaining[1] == '"'
+                        # GRUG: Quoted token — find closing quote
+                        close_idx = findnext('"', remaining, 2)
+                        if isnothing(close_idx)
+                            error("!!! FATAL: /nodeAttach found opening quote with no closing quote! Check your syntax! !!!")
+                        end
+                        push!(tokens, remaining[2:close_idx-1])
+                        remaining = remaining[close_idx+1:end]
+                    else
+                        # GRUG: Unquoted token — split on whitespace
+                        space_idx = findfirst(isspace, remaining)
+                        if isnothing(space_idx)
+                            push!(tokens, remaining)
+                            remaining = ""
+                        else
+                            push!(tokens, remaining[1:space_idx-1])
+                            remaining = remaining[space_idx+1:end]
+                        end
+                    end
+                end
+
+                if length(tokens) < 3
+                    error("!!! FATAL: /nodeAttach needs at least: <target_id> <attach_id> <pattern>. Got $(length(tokens)) token(s)! !!!")
+                end
+
+                target_id = tokens[1]
+                
+                # GRUG: Remaining tokens are pairs: (node_id, pattern)
+                pair_tokens = tokens[2:end]
+                if length(pair_tokens) % 2 != 0
+                    error("!!! FATAL: /nodeAttach attachment args must be pairs of <node_id> <pattern>. Got odd count ($(length(pair_tokens)))! !!!")
+                end
+
+                n_pairs = length(pair_tokens) ÷ 2
+                if n_pairs > MAX_ATTACHMENTS
+                    error("!!! FATAL: /nodeAttach trying to attach $n_pairs nodes at once, but max is $MAX_ATTACHMENTS! !!!")
+                end
+
+                results = String[]
+                for i in 1:n_pairs
+                    aid = pair_tokens[(i-1)*2 + 1]
+                    pat = pair_tokens[(i-1)*2 + 2]
+                    result = attach_node!(target_id, aid, pat)
+                    push!(results, result)
+                end
+
+                println("🔗 /nodeAttach complete:")
+                for r in results
+                    println("   → $r")
+                end
+                add_message_to_history!("System", "/nodeAttach: $(join(results, " | "))", false)
+
+            elseif !isnothing(m_nodedetach)
+                # GRUG: /nodeDetach <target_id> <attach_id>
+                # Remove a specific attached node from a target.
+                target_id = String(strip(m_nodedetach.captures[1]))
+                attach_id = String(strip(m_nodedetach.captures[2]))
+                result = detach_node!(target_id, attach_id)
+                println("🔓 $result")
+                add_message_to_history!("System", "/nodeDetach: $result", false)
+
+            elseif !isnothing(m_attachments)
+                # GRUG: /attachments — show all current node attachments
+                summary = get_attachment_summary()
+                println(summary)
 
             else
                 error("!!! FATAL: Grug command bad format. Use /help to see all valid commands. !!!")
