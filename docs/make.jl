@@ -3,7 +3,7 @@ using GrugBot420
 
 makedocs(
     sitename = "GrugBot420.jl",
-    modules  = [GrugBot420],
+    modules  = Module[],
     authors  = "marshalldavidson61-arch",
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
