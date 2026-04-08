@@ -291,14 +291,16 @@ end
 @testset "Phagy - run_phagy! validation" begin
     reset_engine!()
 
-    # Invalid lock types should throw
-    @test_throws PhagyError PhagyMode.run_phagy!(
+    # Invalid lock types should throw — Julia dispatch rejects at the type level
+    # (MethodError because run_phagy! signature requires ::ReentrantLock).
+    # This is correct behavior: type annotations prevent invalid calls at dispatch.
+    @test_throws MethodError PhagyMode.run_phagy!(
         NODE_MAP, "not a lock",
         HOPFIELD_CACHE, HOPFIELD_CACHE_LOCK,
         [], ReentrantLock()
     )
 
-    println("  ✓ [10] run_phagy!: rejects invalid lock types")
+    println("  ✓ [10] run_phagy!: rejects invalid lock types (MethodError at dispatch)")
 end
 
 # ==============================================================================
@@ -602,14 +604,16 @@ end
 
     msgs = make_messages([("User", "test")])
 
-    @test_throws PhagyError PhagyMode.run_memory_forensics!(
+    # Julia dispatch rejects at the type level (MethodError because
+    # run_memory_forensics! signature requires ::ReentrantLock).
+    @test_throws MethodError PhagyMode.run_memory_forensics!(
         NODE_MAP, "not a lock", msgs, ReentrantLock()
     )
-    @test_throws PhagyError PhagyMode.run_memory_forensics!(
+    @test_throws MethodError PhagyMode.run_memory_forensics!(
         NODE_MAP, NODE_LOCK, msgs, "not a lock"
     )
 
-    println("  ✓ [25] Forensics validation: rejects invalid lock types")
+    println("  ✓ [25] Forensics validation: rejects invalid lock types (MethodError at dispatch)")
 end
 
 # ==============================================================================
