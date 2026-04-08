@@ -807,6 +807,205 @@ end
 end
 
 # ==============================================================================
+# 28. JITGPU — backend selection + SDFParams output contract
+# ==============================================================================
+@testset "JITGPU - CPU backend produces valid SDFParams" begin
+    # GRUG: On CI (no GPU hardware), JITGPU() falls back to KernelAbstractions.CPU()
+    # and runs the same @kernel code on Julia threads. Not a dummy fallback —
+    # it IS the kernel dispatch, just targeting CPU threads instead of GPU cores.
+
+    # 4x4 grayscale image (16 bytes)
+    img_4x4_gray = UInt8[128, 64, 192, 255,
+                          0, 100, 200, 50,
+                          128, 64, 192, 255,
+                          0, 100, 200, 50]
+
+    params = ImageSDF.JITGPU(img_4x4_gray; width=4, height=4)
+
+    # GRUG: SDFParams contract — all arrays must be length n_pixels
+    @test length(params.xArray)          == 16
+    @test length(params.yArray)          == 16
+    @test length(params.brightnessArray) == 16
+    @test length(params.colorArray)      == 16
+    @test params.width  == 4
+    @test params.height == 4
+    @test params.timestamp > 0.0  # GRUG: Birth time was stamped
+
+    # GRUG: All spatial coords must be in [0.0, 1.0]
+    @test all(0.0 .<= params.xArray      .<= 1.0)
+    @test all(0.0 .<= params.yArray      .<= 1.0)
+    @test all(0.0 .<= params.brightnessArray .<= 1.0)
+    @test all(0.0 .<= params.colorArray  .<= 1.0)
+
+    # GRUG: tanh SDF output is always >= 0 (gradient magnitude is non-negative)
+    @test all(params.brightnessArray .>= 0.0)
+
+    println("  ✓ [28] JITGPU CPU backend: SDFParams contract holds for 4x4 grayscale")
+end
+
+# ==============================================================================
+# 29. JITGPU — RGB and RGBA channel paths
+# ==============================================================================
+@testset "JITGPU - RGB and RGBA channel decoding" begin
+    # GRUG: 2x2 RGB image (12 bytes) — test 3-channel decode path
+    rgb_2x2 = UInt8[
+        255, 0, 0,    # red pixel
+        0, 255, 0,    # green pixel
+        0, 0, 255,    # blue pixel
+        255, 255, 0   # yellow pixel
+    ]
+    params_rgb = ImageSDF.JITGPU(rgb_2x2; width=2, height=2)
+    @test length(params_rgb.xArray) == 4
+    @test all(0.0 .<= params_rgb.brightnessArray .<= 1.0)
+    @test all(0.0 .<= params_rgb.colorArray      .<= 1.0)
+
+    # GRUG: Red pixel has low luminance weight for B channel -> color_scalar should be near 1.0
+    # color = clamp((R - B + 1) / 2, 0, 1) = clamp((1.0 - 0.0 + 1.0) / 2, 0, 1) = 1.0
+    # (pixel 1 is red: R=1.0, B=0.0 -> color = 1.0 before SDF)
+    # After gradient pass the color array is unchanged (gradient only modifies brightness).
+    @test params_rgb.colorArray[1] ≈ 1.0 atol=0.01  # Red pixel -> max color scalar
+
+    # GRUG: 2x2 RGBA image (16 bytes) — test 4-channel decode path
+    rgba_2x2 = UInt8[
+        255, 0, 0, 128,   # red + half-alpha
+        0, 255, 0, 255,   # green + full-alpha
+        0, 0, 255, 64,    # blue + quarter-alpha
+        128, 128, 128, 255 # gray + full-alpha
+    ]
+    params_rgba = ImageSDF.JITGPU(rgba_2x2; width=2, height=2)
+    @test length(params_rgba.xArray) == 4
+    @test all(0.0 .<= params_rgba.brightnessArray .<= 1.0)
+    # GRUG: Alpha channel is ignored for brightness/color — same result as RGB path
+    @test params_rgba.colorArray[1] ≈ 1.0 atol=0.01  # Red pixel again -> max color
+
+    println("  ✓ [29] JITGPU channel paths: RGB and RGBA decoded correctly")
+end
+
+# ==============================================================================
+# 30. JITGPU — error handling (no silent failures)
+# ==============================================================================
+@testset "JITGPU - Error cases propagate" begin
+    # GRUG: Empty binary
+    @test_throws ImageSDF.ImageSDFError ImageSDF.JITGPU(UInt8[]; width=4, height=4)
+
+    # GRUG: Invalid dimensions
+    valid_bytes = UInt8[128, 64, 192, 255, 0, 100, 200, 50,
+                        128, 64, 192, 255, 0, 100, 200, 50]
+    @test_throws ImageSDF.ImageSDFError ImageSDF.JITGPU(valid_bytes; width=0, height=4)
+    @test_throws ImageSDF.ImageSDFError ImageSDF.JITGPU(valid_bytes; width=4, height=-1)
+
+    # GRUG: Binary too small for stated dimensions
+    tiny = UInt8[1, 2, 3]
+    @test_throws ImageSDF.ImageSDFError ImageSDF.JITGPU(tiny; width=100, height=100)
+
+    println("  ✓ [30] JITGPU error cases: all throw ImageSDFError, no silent failures")
+end
+
+# ==============================================================================
+# 31. JITGPU — output matches CPU reference path within Float32 tolerance
+# ==============================================================================
+@testset "JITGPU - Output consistent with image_to_sdf_params CPU reference" begin
+    # GRUG: Both JITGPU and image_to_sdf_params implement the same algorithm:
+    # decode -> central-diff gradient -> tanh(3 * grad_mag).
+    # Results should match within Float32 rounding tolerance (JITGPU uses Float32
+    # internally, converts to Float64 at end; CPU reference uses Float64 throughout).
+
+    img_data = UInt8[200, 100, 50, 25, 150, 75,
+                     200, 100, 50, 25, 150, 75,
+                     200, 100, 50, 25, 150, 75]  # 6x3 grayscale
+
+    gpu_params = ImageSDF.JITGPU(img_data; width=6, height=3)
+    cpu_params = ImageSDF.image_to_sdf_params(img_data, 6, 3)
+
+    # GRUG: Arrays same length
+    @test length(gpu_params.xArray)          == length(cpu_params.xArray)
+    @test length(gpu_params.brightnessArray) == length(cpu_params.brightnessArray)
+
+    # GRUG: Spatial coordinates should be identical (same formula, no float precision diff)
+    @test gpu_params.xArray ≈ cpu_params.xArray atol=1e-5
+    @test gpu_params.yArray ≈ cpu_params.yArray atol=1e-5
+
+    # GRUG: SDF brightness should match within Float32 tolerance (~1e-5 for tanh(grad))
+    @test gpu_params.brightnessArray ≈ cpu_params.brightnessArray atol=1e-4
+
+    # GRUG: Dimensions preserved
+    @test gpu_params.width  == cpu_params.width
+    @test gpu_params.height == cpu_params.height
+
+    println("  ✓ [31] JITGPU vs CPU reference: outputs match within Float32 tolerance")
+end
+
+# ==============================================================================
+# 32. JITGPU — uniform image (all same pixel) produces near-zero SDF
+# ==============================================================================
+@testset "JITGPU - Uniform image yields near-zero SDF (no edges)" begin
+    # GRUG: A completely uniform image has zero gradient everywhere.
+    # tanh(3 * 0.0) = 0.0 -> all SDF values should be exactly 0.
+    # Exception: boundary pixels (clamp-to-edge) are also uniform -> still 0.
+
+    uniform_4x4 = fill(UInt8(128), 16)  # 4x4 grayscale, all 128
+    params = ImageSDF.JITGPU(uniform_4x4; width=4, height=4)
+
+    @test all(params.brightnessArray .< 1e-5)  # GRUG: No edges -> SDF near zero
+
+    println("  ✓ [32] JITGPU uniform image: all SDF values near zero (no gradient)")
+end
+
+# ==============================================================================
+# 33. JITGPU — sharp edge image produces high SDF activation at edge
+# ==============================================================================
+@testset "JITGPU - Sharp edge image activates SDF at edge boundary" begin
+    # GRUG: Left half black (0), right half white (255) in a 4x4 grayscale image.
+    # The vertical edge at column 2 should have high gradient -> high SDF activation.
+    # Interior of each half (far from edge) should be near zero.
+    half_black_half_white = UInt8[
+        0,   0, 255, 255,
+        0,   0, 255, 255,
+        0,   0, 255, 255,
+        0,   0, 255, 255
+    ]
+    params = ImageSDF.JITGPU(half_black_half_white; width=4, height=4)
+
+    # GRUG: Pixels at the edge boundary (col 1->2 transition) should have high SDF.
+    # Linear pixel index: col=1 (0-based) for row 0 is pixel 2 (1-based).
+    # col=2 (0-based) for row 0 is pixel 3 (1-based).
+    # Edge pixels have gx = (255 - 0) / 255 ≈ 1.0 -> tanh(3 * 1.0) ≈ 0.995
+    edge_pixel_left  = params.brightnessArray[2]  # row 0, col 1 (just left of edge)
+    edge_pixel_right = params.brightnessArray[3]  # row 0, col 2 (just right of edge)
+
+    @test edge_pixel_left  > 0.9   # GRUG: Strong edge activation
+    @test edge_pixel_right > 0.9   # GRUG: Strong edge activation
+
+    # GRUG: Far-from-edge pixels: row 0 col 0 (pixel 1) has no right-neighbor edge
+    # (col_left = col_right = 0 due to clamping -> gx = 0 -> SDF = 0)
+    far_from_edge = params.brightnessArray[1]  # row 0, col 0 — leftmost, clamped neighbor
+    @test far_from_edge < 1e-5  # GRUG: No gradient at fully clamped corner pixel
+
+    println("  ✓ [33] JITGPU edge detection: sharp edge produces high SDF activation")
+end
+
+# ==============================================================================
+# 34. JITGPU — sdf_to_signal pipeline (JITGPU -> signal)
+# ==============================================================================
+@testset "JITGPU - Full pipeline: JITGPU -> sdf_to_signal" begin
+    # GRUG: End-to-end pipeline test. JITGPU -> SDFParams -> sdf_to_signal -> Vector{Float64}.
+    # This is the exact pipeline called at /imgnodeAttach time.
+
+    img_data = UInt8[128, 64, 192, 255, 0, 100, 200, 50,
+                     128, 64, 192, 255, 0, 100, 200, 50]  # 4x4 grayscale
+
+    params = ImageSDF.JITGPU(img_data; width=4, height=4)
+    signal = ImageSDF.sdf_to_signal(params; max_samples=16)
+
+    # GRUG: sdf_to_signal interleaves [x, y, brightness, color] per sample -> 4 * samples
+    @test length(signal) == 4 * 16
+    @test all(isfinite, signal)       # GRUG: No NaN or Inf
+    @test all(0.0 .<= signal .<= 1.0) # GRUG: All values in normalized range
+
+    println("  ✓ [34] JITGPU pipeline: JITGPU -> sdf_to_signal produces valid signal")
+end
+
+# ==============================================================================
 # SUMMARY
 # ==============================================================================
 println("\n" * "="^60)

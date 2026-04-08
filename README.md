@@ -258,9 +258,9 @@ When `node_0` fires:
 /imgnodeAttach node_0 img_node_1 "data:image/png;base64,iVBOR..." 64 64
 ```
 
-Does everything `/nodeAttach` does but for **image nodes**. Instead of text connector patterns, uses image binary converted to **nonlinear SDF** at attach time (JIT GPU accel):
+Does everything `/nodeAttach` does but for **image nodes**. Instead of text connector patterns, uses image binary converted to **nonlinear SDF** at attach time via real GPU kernel dispatch:
 1. Image binary is detected and decoded from the input (Base64 data URI, hex dump, or raw bytes)
-2. Converted to `SDFParams` via `image_to_sdf_params()` — nonlinear gradient-based signed distance field
+2. Converted to `SDFParams` via **`JITGPU(binary; width, height)`** — real `KernelAbstractions.jl` kernel dispatch. Backend selected at runtime: `CUDABackend()` (NVIDIA), `ROCBackend()` (AMD), `MetalBackend()` (Apple Silicon), or `CPU()` multithreaded fallback on CI/no-GPU. Two-pass kernel: parallel pixel decode → `synchronize` → parallel `tanh(3×grad_mag)` SDF activation
 3. Flattened to a signal vector via `sdf_to_signal()` for PatternScanner compatibility
 4. `base_confidence` is baked from **SDF cosine similarity** between the connector signal and the attached image node's own signal, plus strength bonus
 5. The attached node **must** be an image node (`is_image_node=true`); text nodes are rejected with an explicit error
@@ -377,7 +377,7 @@ julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail
 | `src/ChatterMode.jl` | Idle gossip system (v7.1): 50–500 ephemeral clones, 1000+ node gate, weak-only morph, 24h cooldown, 120s±30s shared timer. |
 | `src/PhagyMode.jl` | Seven idle-time maintenance automata for self-healing map management (includes memory forensics). |
 | `src/EyeSystem.jl` | Visual attention: edge blurring, arousal-gated center cutout, attention modulation. |
-| `src/ImageSDF.jl` | JIT image → SDF parameter conversion for image node matching. |
+| `src/ImageSDF.jl` | `JITGPU(binary)` — real KernelAbstractions.jl GPU kernel dispatch for image→SDF conversion. CPU reference path (`image_to_sdf_params`) kept for backward compat. |
 | `src/SemanticVerbs.jl` | Live mutable verb registry: causal, spatial, temporal classes + runtime synonyms. |
 | `src/ActionTonePredictor.jl` | Pre-vote input classifier: predicts action type and tone, nudges arousal and confidence weights. |
 | `grugbot_whitepaper.html` | Full technical documentation and architecture reference. |

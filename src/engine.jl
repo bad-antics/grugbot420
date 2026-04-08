@@ -923,9 +923,11 @@ Does everything attach_node! does but for image nodes:
   4. Stores the SDF signal + base_confidence in the AttachedNode struct
   5. Pattern field stores metadata: "SDF:<format>:<width>x<height>" for AIML ref
 
-JIT GPU ACCEL: The expensive image→SDF conversion + similarity computation
-happens ONCE here at attach time. At fire time, only jitter is applied to
-the pre-baked base_confidence. Same as text JIT baking but with SDF math.
+JIT GPU ACCEL: JITGPU(binary) dispatches real KernelAbstractions.jl kernels —
+CUDABackend() on NVIDIA, ROCBackend() on AMD, MetalBackend() on Apple Silicon,
+CPU() (multithreaded) on CI/no-GPU. The expensive image→SDF conversion + similarity
+computation happens ONCE here at attach time. At fire time, only jitter is applied
+to the pre-baked base_confidence. Same as text JIT baking but with SDF math.
 
 Validation (error-first, NO silent failures):
   - target_id must exist in NODE_MAP and not be grave
@@ -977,8 +979,10 @@ function attach_image_node!(target_id::String, attach_id::String, image_data::Ve
     end
 
     # GRUG: JIT GPU ACCEL — Convert image binary to nonlinear SDF at attach time!
+    # JITGPU() dispatches real KernelAbstractions kernels: CUDABackend() on NVIDIA,
+    # ROCBackend() on AMD, MetalBackend() on Apple Silicon, CPU() on CI/no-GPU.
     # This is the expensive computation that happens ONCE, not every fire cycle.
-    connector_sdf = ImageSDF.image_to_sdf_params(image_data, width, height)
+    connector_sdf = ImageSDF.JITGPU(image_data; width=width, height=height)
     connector_signal = ImageSDF.sdf_to_signal(connector_sdf)
 
     # GRUG: JIT CONFIDENCE BAKING — SDF cosine similarity + strength bonus

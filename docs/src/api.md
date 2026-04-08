@@ -41,7 +41,8 @@ The tier can only go **down**, never up. If the input demands cheap scan, the no
 ## Image SDF (`ImageSDF`)
 
 - `detect_image_binary(input)` — detects Base64 image data URIs or raw binary image headers. Returns `(found::Bool, format::Symbol, payload::String)`.
-- `image_to_sdf_params(pixels, width, height)` — converts a raw pixel buffer to `SDFParams` (x/y arrays, brightness, color, dimensions).
+- `JITGPU(binary; width, height)` — **GPU-accelerated** nonlinear SDF conversion via `KernelAbstractions.jl`. Dispatches `@kernel` functions to `CUDABackend()`, `ROCBackend()`, `MetalBackend()`, or `CPU()` (multithreaded, CI-safe) based on runtime detection. Two-pass kernel: Pass 1 decodes pixels in parallel; `synchronize(backend)` ensures all neighbors exist before Pass 2 computes `tanh(3 × grad_mag)` SDF activations. Returns `SDFParams`.
+- `image_to_sdf_params(pixels, width, height)` — CPU reference implementation (same algorithm as `JITGPU` but Float64 throughout). Kept for backward compatibility and test comparison.
 - `SDFParams` — struct holding the SDF representation of an image for pattern scanning.
 
 ## Semantic Verbs (`SemanticVerbs`)
@@ -88,7 +89,7 @@ The attachment system enables explicit relational firing chains between nodes. I
 
 - `attach_node!(target_id, attach_id, pattern)` — Attach a text node to a target with a connector pattern (middleman). JIT confidence baking: the connector pattern is scanned against the **attached node's own pattern** at attach time via `_token_overlap_similarity()`, combined with a strength bonus `(strength / STRENGTH_CAP) * 0.5`, and stored as `base_confidence`. The signal is pre-baked via `words_to_signal()`. Validates: non-empty arguments, node existence, grave status, self-attach prevention, max cap, duplicate prevention. Returns a human-readable confirmation string including the baked `base_confidence`.
 
-- `attach_image_node!(target_id, attach_id, image_data, width, height)` — Attach an image node to a target with SDF-based relational fire. JIT GPU accel: image binary is converted to nonlinear SDF at attach time via `image_to_sdf_params()`, flattened to a signal via `sdf_to_signal()`, and `base_confidence` is baked from `_sdf_signal_similarity()` (cosine similarity) + strength bonus. The attach node **must** be an image node (`is_image_node=true`). Pattern field stores `"SDF:image:WxH"` metadata. All validations from `attach_node!` apply, plus image-specific checks (non-empty data, valid dimensions, image node requirement).
+- `attach_image_node!(target_id, attach_id, image_data, width, height)` — Attach an image node to a target with SDF-based relational fire. JIT GPU accel: image binary is converted to nonlinear SDF at attach time via `JITGPU(image_data; width, height)` (real KernelAbstractions.jl kernel dispatch — CUDA/ROC/Metal/CPU), flattened to a signal via `sdf_to_signal()`, and `base_confidence` is baked from `_sdf_signal_similarity()` (cosine similarity) + strength bonus. The attach node **must** be an image node (`is_image_node=true`). Pattern field stores `"SDF:image:WxH"` metadata. All validations from `attach_node!` apply, plus image-specific checks (non-empty data, valid dimensions, image node requirement).
 
 - `detach_node!(target_id, attach_id)` — Remove a specific attachment (works for both text and image). Cleans up the target's entry entirely if no attachments remain. Returns a confirmation string.
 

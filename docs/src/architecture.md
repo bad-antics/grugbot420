@@ -47,13 +47,19 @@ The attachment relay is **Pass 3** of `scan_and_expand()` in `engine.jl`. After 
 The **connector pattern** (middleman) is the core of the relay system. Confidence is computed **once at attach time** (JIT), not every fire cycle:
 
 1. **Text nodes** (`/nodeAttach`): token overlap similarity between the connector pattern and the **attached node's own pattern** (Jaccard) + strength bonus → stored as `base_confidence`
-2. **Image nodes** (`/imgnodeAttach`): image binary → nonlinear SDF conversion (JIT GPU accel) → cosine similarity between connector SDF signal and attached image node's signal + strength bonus → stored as `base_confidence`
+2. **Image nodes** (`/imgnodeAttach`): image binary → `JITGPU(binary)` (real KernelAbstractions.jl GPU kernel dispatch) → cosine similarity between connector SDF signal and attached image node's signal + strength bonus → stored as `base_confidence`
 
 At fire time, only stochastic jitter is applied: `confidence = max(0.1, base_confidence + randn() * 0.05)`. The connector pattern is still stored for AIML reference and surfaces as a `RelationalTriple(target_id, "relay_attached", connector_pattern)` so downstream knows WHY these nodes were co-activated.
 
 ### Image Attachment (`/imgnodeAttach`)
 
-Image attachments use the same `AttachedNode` struct and `ATTACHMENT_MAP` as text attachments. The key difference is the JIT computation at attach time: image binary is converted to nonlinear SDF parameters via `image_to_sdf_params()`, then flattened to a signal vector via `sdf_to_signal()`. Confidence is derived from `_sdf_signal_similarity()` (cosine similarity) instead of `_token_overlap_similarity()` (Jaccard). The pattern field stores SDF metadata (`"SDF:image:WxH"`) instead of a text connector pattern.
+Image attachments use the same `AttachedNode` struct and `ATTACHMENT_MAP` as text attachments. The key difference is the JIT computation at attach time: image binary is converted to nonlinear SDF parameters via **`JITGPU(binary; width, height)`**, then flattened to a signal vector via `sdf_to_signal()`. Confidence is derived from `_sdf_signal_similarity()` (cosine similarity) instead of `_token_overlap_similarity()` (Jaccard). The pattern field stores SDF metadata (`"SDF:image:WxH"`) instead of a text connector pattern.
+
+`JITGPU` uses `KernelAbstractions.jl` to dispatch real GPU kernels across backends selected at runtime: `CUDABackend()` on NVIDIA hardware, `ROCBackend()` on AMD, `MetalBackend()` on Apple Silicon, and `CPU()` (multithreaded Julia threads) as the CI-safe fallback. The kernel code is identical across all backends — only the dispatch target changes. The two-pass kernel pipeline is:
+
+1. **Pass 1 (`_sdf_pixel_decode_kernel!`)**: one thread per pixel — decode UInt8 bytes (gray/RGB/RGBA) → `brightness_raw`, `color_scalar`, normalized `x`/`y` coordinates
+2. **`KernelAbstractions.synchronize(backend)`**: device barrier — all pixels decoded before any gradient reads its neighbors
+3. **Pass 2 (`_sdf_gradient_kernel!`)**: central-difference gradient → `tanh(3 × grad_mag)` nonlinear SDF activation — edges produce high activation, uniform regions suppress to near zero
 
 Key properties:
 - Max 4 attachments per target node (text + image share the same pool)
