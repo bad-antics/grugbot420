@@ -278,41 +278,40 @@ those neighbors must already be decoded before we can diff them.
     # GRUG: KernelAbstractions gives each thread its global linear index.
     i = @index(Global, Linear)
 
-    n_pixels = width * height
-    if i > n_pixels
-        return  # GRUG: Guard against over-launch (last workgroup may be partial)
-    end
+    # GRUG: KA kernels cannot use bare `return` — wrap body in bounds guard instead.
+    # Last workgroup may be partial (over-launched), so skip out-of-bounds threads.
+    if i <= width * height
+        # GRUG: Row and column from linear index (0-based arithmetic, then back to 1-based)
+        row_0 = (i - 1) ÷ width   # 0-based row
+        col_0 = (i - 1) % width   # 0-based col
 
-    # GRUG: Row and column from linear index (0-based arithmetic, then back to 1-based)
-    row_0 = (i - 1) ÷ width   # 0-based row
-    col_0 = (i - 1) % width   # 0-based col
+        # GRUG: Normalized spatial coordinates [0.0, 1.0]
+        x_out[i] = Float32(col_0) / Float32(max(width  - 1, 1))
+        y_out[i] = Float32(row_0) / Float32(max(height - 1, 1))
 
-    # GRUG: Normalized spatial coordinates [0.0, 1.0]
-    x_out[i] = Float32(col_0) / Float32(max(width  - 1, 1))
-    y_out[i] = Float32(row_0) / Float32(max(height - 1, 1))
+        # GRUG: Decode pixel color from raw bytes
+        base_idx = (i - 1) * channels + 1
 
-    # GRUG: Decode pixel color from raw bytes
-    base_idx = (i - 1) * channels + 1
-
-    if channels == 1
-        b = Float32(raw[base_idx]) / 255f0
-        bright_raw[i] = b
-        color_out[i]  = b   # no color info in grayscale
-    elseif channels == 3
-        r = Float32(raw[base_idx])     / 255f0
-        g = Float32(raw[base_idx + 1]) / 255f0
-        b = Float32(raw[base_idx + 2]) / 255f0
-        # GRUG: ITU-R BT.709 luminance
-        bright_raw[i] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
-        # GRUG: Hue proxy: R-B spread normalized to [0,1]
-        color_out[i]  = clamp((r - b + 1f0) / 2f0, 0f0, 1f0)
-    else  # channels == 4 (RGBA) or channels > 4 (ignore extra)
-        r = Float32(raw[base_idx])     / 255f0
-        g = Float32(raw[base_idx + 1]) / 255f0
-        b = Float32(raw[base_idx + 2]) / 255f0
-        bright_raw[i] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
-        color_out[i]  = clamp((r - b + 1f0) / 2f0, 0f0, 1f0)
-        # GRUG: Alpha channel ignored — brightness is what matters for SDF structure
+        if channels == 1
+            b = Float32(raw[base_idx]) / 255f0
+            bright_raw[i] = b
+            color_out[i]  = b   # no color info in grayscale
+        elseif channels == 3
+            r = Float32(raw[base_idx])     / 255f0
+            g = Float32(raw[base_idx + 1]) / 255f0
+            b = Float32(raw[base_idx + 2]) / 255f0
+            # GRUG: ITU-R BT.709 luminance
+            bright_raw[i] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
+            # GRUG: Hue proxy: R-B spread normalized to [0,1]
+            color_out[i]  = clamp((r - b + 1f0) / 2f0, 0f0, 1f0)
+        else  # channels == 4 (RGBA) or channels > 4 (ignore extra)
+            r = Float32(raw[base_idx])     / 255f0
+            g = Float32(raw[base_idx + 1]) / 255f0
+            b = Float32(raw[base_idx + 2]) / 255f0
+            bright_raw[i] = 0.2126f0 * r + 0.7152f0 * g + 0.0722f0 * b
+            color_out[i]  = clamp((r - b + 1f0) / 2f0, 0f0, 1f0)
+            # GRUG: Alpha channel ignored — brightness is what matters for SDF structure
+        end
     end
 end
 
@@ -338,31 +337,29 @@ This is the "nonlinear" in "nonlinear SDF" — structural edges pop, noise reced
 )
     i = @index(Global, Linear)
 
-    n_pixels = width * height
-    if i > n_pixels
-        return
+    # GRUG: KA kernels cannot use bare `return` — wrap body in bounds guard instead.
+    if i <= width * height
+        row_0 = (i - 1) ÷ width
+        col_0 = (i - 1) % width
+
+        # GRUG: Clamp-to-boundary neighbor lookup (no wrap-around, mirror at edges)
+        row_up    = max(row_0 - 1, 0)
+        row_down  = min(row_0 + 1, height - 1)
+        col_left  = max(col_0 - 1, 0)
+        col_right = min(col_0 + 1, width - 1)
+
+        idx_up    = row_up    * width + col_0       + 1
+        idx_down  = row_down  * width + col_0       + 1
+        idx_left  = row_0     * width + col_left    + 1
+        idx_right = row_0     * width + col_right   + 1
+
+        gx = bright_raw[idx_right] - bright_raw[idx_left]
+        gy = bright_raw[idx_down]  - bright_raw[idx_up]
+
+        # GRUG: Gradient magnitude then nonlinear tanh activation
+        grad_mag = sqrt(gx * gx + gy * gy)
+        bright_sdf[i] = tanh(3f0 * grad_mag)
     end
-
-    row_0 = (i - 1) ÷ width
-    col_0 = (i - 1) % width
-
-    # GRUG: Clamp-to-boundary neighbor lookup (no wrap-around, mirror at edges)
-    row_up   = max(row_0 - 1, 0)
-    row_down = min(row_0 + 1, height - 1)
-    col_left = max(col_0 - 1, 0)
-    col_right = min(col_0 + 1, width - 1)
-
-    idx_up    = row_up    * width + col_0       + 1
-    idx_down  = row_down  * width + col_0       + 1
-    idx_left  = row_0     * width + col_left    + 1
-    idx_right = row_0     * width + col_right   + 1
-
-    gx = bright_raw[idx_right] - bright_raw[idx_left]
-    gy = bright_raw[idx_down]  - bright_raw[idx_up]
-
-    # GRUG: Gradient magnitude then nonlinear tanh activation
-    grad_mag = sqrt(gx * gx + gy * gy)
-    bright_sdf[i] = tanh(3f0 * grad_mag)
 end
 
 # ------------------------------------------------------------------------------
