@@ -1,249 +1,126 @@
-# Grug System Compilation & Deployment Whitepaper
+# 🧠 grugbot420 — Debian Deployment Guide
 
-Target: Julia-based Cognitive/Modular Runtime System\
-Platform: Debian 12\
-Runtime: Julia\
-Artifact: `grug` modular execution engine
+Platform: Debian 12 (Bookworm) · Architecture: x86_64
 
-------------------------------------------------------------------------
+---
 
-## 1. Abstract
+## The short version
 
-This document describes how to transform the `grug` codebase (a modular
-Julia runtime composed of behavioral, stochastic, and perception-like
-subsystems) into a reproducible, deployable execution unit.
+GrugBot now ships as a single self-extracting binary. No Julia install required upfront,
+no dependency wrangling, no source checkout. Download, chmod, run.
 
-The system is currently a script-structured Julia project, requiring: -
-explicit dependency resolution - manual module inclusion - environment
-stabilization - optional binary compilation
-
-The goal is to support: - deterministic execution - reproducible
-environments - background deployment (daemon mode) - optional binary
-packaging
-
-------------------------------------------------------------------------
-
-## 2. System Architecture Overview
-
-### 2.1 Core Modules
-
-The system is composed of the following functional layers:
-
-**Execution Core** - `Main.jl` → orchestration entrypoint - `engine.jl`
-→ runtime execution loop
-
-**Cognitive / Behavioral Layer** - `BrainStem.jl` → control logic -
-`Lobe.jl`, `LobeTable.jl` → modular processing units - `ChatterMode.jl`
-→ dialogue behavior - `PhagyMode.jl` → suppression / filtering behavior
-
-**Perception Layer** - `EyeSystem.jl` → input interpretation -
-`ImageSDF.jl` → signal extraction from image-like inputs
-
-**Input / Scheduling** - `InputQueue.jl` → ingestion buffer -
-`PatternScanner.jl` → pattern detection
-
-**Semantic Layer** - `SemanticVerbs.jl` → action mapping -
-`Thesaurus.jl` → semantic normalization
-
-**Stochastic Layer** - `stochastichelper.jl` → probability utilities -
-`ActionTonePredictor.jl` → probabilistic output shaping
-
-### 2.2 Dependency Graph Issue
-
-The current system is not package-compliant:
-
-**Observed Problems** - Missing module: `CoinFlipHeader` - Direct file
-includes instead of `src/` structure - No strict `Project.toml`
-dependency lock - Implicit global namespace reliance
-
-### 2.3 Obtaining the Source Code
-
-Download and extract the `grugger.zip` archive (which contains the
-`grugbot420-main` directory):
-
-``` bash
-wget https://download854.mediafire.com/nkuqiyh5etogGoGbE8l96V4G3vflyIg95o1GaGUpRrkI21pcqDRiw7Tk3DTCGT-neu2eELy_kGO6wFZPf8G1pLcDaFgtoJLImqYikQixiJLH0wQFvSCALsf7aB-f3GtHcbn7pCp1otgEAybWdwbCJMZzyJ2v48YgQJFcYC_ioAVxaA/ncqkrypl0toj6k4/grugger.zip
-unzip grugger.zip
-cd grugbot420-main
+```bash
+wget https://github.com/marshalldavidson61-arch/grugbot420/raw/main/grug-binary/grugbot420
+chmod +x grugbot420
+./grugbot420
 ```
 
-> Note: The extracted folder is `grugbot420-main`. All subsequent
-> commands assume you are inside this directory.
+That is it. The binary handles everything else.
 
-------------------------------------------------------------------------
+---
 
-## 3. Environment Setup
+## What happens on first run
 
-### 3.1 Install Julia
+1. The binary extracts the full GrugBot source to a local directory
+2. It checks whether `julia` is on your PATH
+3. **If Julia is missing** — the binary opens [julialang.org/downloads](https://julialang.org/downloads/) in your browser, prints the install URL, and waits at the prompt. Install Julia, make sure it is on your PATH, press Enter. The binary re-checks and continues.
+4. Once Julia is confirmed present, the engine starts and you land at the `Brain >` prompt
+5. Every subsequent run skips the dep check entirely and goes straight to the prompt
 
-``` bash
+---
+
+## Installing Julia on Debian
+
+If you need Julia and want to install it before running grugbot for the first time:
+
+```bash
+# Download Julia 1.10 (1.9+ required)
 wget https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz
 tar -xzf julia-1.10.5-linux-x86_64.tar.gz
 sudo mv julia-1.10.5 /opt/julia
+
+# Add to PATH (add this line to ~/.bashrc or ~/.profile for persistence)
 export PATH=/opt/julia/bin:$PATH
+
+# Verify
+julia --version
 ```
 
-### 3.2 Initialize Project
+Then run the binary normally — it will find Julia and proceed without prompting.
 
-``` bash
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+---
+
+## Running in the background (daemon mode)
+
+```bash
+nohup ./grugbot420 > grugbot.log 2>&1 &
+tail -f grugbot.log
 ```
 
-### 3.3 Required Packages
+---
 
-``` bash
-julia --project=. -e 'using Pkg; Pkg.add(["Distributions","JSON"])'
-```
+## systemd service
 
-------------------------------------------------------------------------
+Create `/etc/systemd/system/grugbot420.service`:
 
-## 4. Dependency Repair Strategy
-
-### 4.1 Missing Module Stub Pattern
-
-``` julia
-module CoinFlipHeader
-
-export coinflip
-
-coinflip(p=0.5) = rand() < p
-
-end
-```
-
-### 4.2 Correct Inclusion Pattern
-
-``` julia
-include("CoinFlipHeader.jl")
-include("engine.jl")
-
-using .CoinFlipHeader
-using .BrainStem
-using .ChatterMode
-```
-
-------------------------------------------------------------------------
-
-## 5. Execution Modes
-
-### 5.1 Foreground Execution
-
-``` bash
-julia --project=. Main.jl
-```
-
-### 5.2 Background Execution
-
-``` bash
-nohup julia --project=. Main.jl > out.log 2>&1 &
-tail -f out.log
-```
-
-------------------------------------------------------------------------
-
-## 6. Compilation Strategy
-
-### 6.1 PackageCompiler Sysimage
-
-``` bash
-julia -e 'using Pkg; Pkg.add("PackageCompiler")'
-```
-
-``` bash
-julia -e '
-using PackageCompiler;
-create_sysimage([:JSON, :Distributions], sysimage_path="grug_sys.so", precompile_execution_file="Main.jl")
-'
-```
-
-### 6.2 Run with Sysimage
-
-``` bash
-julia -J grug_sys.so Main.jl
-```
-
-### 6.3 App Binary
-
-``` bash
-julia -e '
-using PackageCompiler;
-create_app(".", "grug_app")
-'
-```
-
-``` bash
-./grug_app/bin/grug
-```
-
-------------------------------------------------------------------------
-
-## 7. Production Hardening
-
-``` bash
-ulimit -n 4096
-julia --startup-file=no --project=. Main.jl
-```
-
-------------------------------------------------------------------------
-
-## 8. Systemd Deployment
-
-``` ini
+```ini
 [Unit]
-Description=Grug Engine
+Description=GrugBot420 AI Engine
 After=network.target
 
 [Service]
-ExecStart=/opt/julia/bin/julia --project=. Main.jl
-WorkingDirectory=/root/grug/grugbot420-main
-Restart=always
+ExecStart=/path/to/grugbot420
+WorkingDirectory=/path/to
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-------------------------------------------------------------------------
+Enable and start:
 
-## 9. Failure Modes
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable grugbot420
+sudo systemctl start grugbot420
+sudo journalctl -u grugbot420 -f
+```
 
-  Error               Cause
-  ------------------- --------------------------
-  Package not found   missing Pkg.add
-  Module not found    missing include or stub
-  Method error        API mismatch
-  stack overflow      recursion in engine loop
+---
 
-------------------------------------------------------------------------
+## Verifying the binary
 
-## 10. Recommended Architecture
+```bash
+# Requires bindboss (github.com/marshalldavidson61-arch/Bindboss)
+bindboss verify ./grugbot420
+```
 
-    grug/
-      src/
-        Core/
-        Cognitive/
-        Perception/
-        Semantic/
-        Stochastic/
-      Main.jl
-      Project.toml
-      Manifest.toml
+Expected SHA-256: `03fb36ca7c0dec0c8f7234e967572b464dbfce7ed889c0b458673ec8e3f9a3c3`
 
-------------------------------------------------------------------------
+Or verify manually:
 
-## 11. Summary
+```bash
+# The payload hash is stored in the binary's trailer — bindboss verify does this for you
+sha256sum grugbot420
+```
 
-1.  Download source\
-2.  Install Julia\
-3.  Instantiate dependencies\
-4.  Patch missing modules\
-5.  Ensure explicit include graph\
-6.  Run or daemonize\
-7.  Optionally compile
+---
 
-------------------------------------------------------------------------
+## Coming soon
 
-## 12. Quick Deployment Commands
+GrugBot420 will be available directly from Linux package repositories (apt, etc.).
+When that lands, installation will be a single `apt install grugbot420` with no manual steps.
+Watch the repo for updates.
 
-\`\`\`bash wget
-https://download854.mediafire.com/nkuqiyh5etogGoGbE8l96V4G3vflyIg95o1GaGUpRrkI21pcqDRiw7Tk3DTCGT-neu2eELy_kGO6wFZPf8G1pLcDaFgtoJLImqYikQixiJLH0wQFvSCALsf7aB-f3GtHcbn7pCp1otgEAybWdwbCJMZzyJ2v48YgQJFcYC_ioAVxaA/ncqkrypl0toj6k4/grugger.zip
-unzip grugger.zip cd grugbot420-main
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `julia: command not found` after installing | Add Julia's `bin/` directory to your PATH and open a new terminal |
+| Binary won't run: `Permission denied` | Run `chmod +x grugbot420` |
+| Engine starts but crashes immediately | Check `grugbot.log` — most likely a missing Julia package; run `julia --project=. -e 'using Pkg; Pkg.instantiate()'` in the extracted dir |
+| Want to force a fresh dep check | `bindboss reset grugbot420` then re-run the binary |
