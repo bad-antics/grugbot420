@@ -24,3 +24,6 @@ Thumbs.db
 # Temp files
 /tmp/
 *.tmp
+
+# Working notes (not for distribution)
+todo.md

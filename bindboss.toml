@@ -13,3 +13,7 @@ post_run = []
 
 [extract]
 persist = true
+
+[install]
+enabled = true
+install_file = "src/install.json"
