@@ -9,45 +9,19 @@ A neuromorphic AI engine written in Julia. GrugBot models cognition through comp
 
 ---
 
-## Installation
-
-**From the Julia General Registry** (once registered):
-
-```julia
-using Pkg
-Pkg.add("GrugBot420")
-```
-
-**From GitHub directly:**
-
-```julia
-using Pkg
-Pkg.add(url="https://github.com/marshalldavidson61-arch/grugbot420")
-```
-
-### Requirements
-
-- [Julia](https://julialang.org/downloads/) 1.9+
-- Dependencies (`Distributions`, `JSON`) are installed automatically via `Project.toml`
 
 ---
 
-## Running GrugBot
+## Quick Start
 
-**As a package:**
-
-```julia
-using GrugBot420
-GrugBot420.main()
-```
-
-**Standalone (from the repo):**
+Download the prebuilt binary from [`grug-binary/`](./grug-binary/):
 
 ```bash
-julia src/Main.jl
+chmod +x grugbot420
+./grugbot420
 ```
 
-The engine seeds three boot nodes, prints a startup banner, and drops you at the `Brain >` prompt.
+Requires [Julia 1.9+](https://julialang.org/downloads/) on your PATH. First run detects a missing Julia install, opens the download page, and waits. Every run after that goes straight to the `Brain >` prompt.
 
 ---
 
@@ -333,33 +307,6 @@ Both chatter and phagy share the same slow idle timer and the same 1000+ node po
 
 ---
 
-## Running Tests
-
-**Via the package manager (recommended):**
-
-```julia
-using Pkg
-Pkg.test("GrugBot420")
-```
-
-**Individual test files (standalone):**
-
-```bash
-julia test/test_smoke.jl            # 16 integration groups
-julia test/test_lobes.jl            # 123 assertions
-julia test/test_lobe_table.jl       # 193 assertions
-julia test/test_brainstem.jl        # 39 assertions
-julia test/test_thesaurus.jl        # 151 assertions
-julia test/test_chat_specimen.jl    # 18 specimens
-julia test/test_input_queue.jl      # 20 groups, 1095 assertions
-julia test/test_action_packet.jl    # 18 groups, 111 assertions
-julia test/test_load_specimen.jl    # 14 groups, 102 assertions
-julia test/test_phagy.jl            # 28 groups, phagy automata + memory forensics
-julia test/test_node_attach.jl     # 19 groups, relational fire attachment system
-julia test/live_training_test.jl    # Multi-lobe training (12+ pass, 0 hard fail)
-```
-
----
 
 ## File Reference
 

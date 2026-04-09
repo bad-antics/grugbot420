@@ -1,0 +1,15 @@
+name = "grugbot420"
+run = "julia src/Main.jl"
+
+[[needs]]
+name = "julia"
+check = "julia --version"
+url = "https://julialang.org/downloads/"
+message = "GrugBot needs Julia 1.9+. Download from julialang.org, install, make sure `julia` is on your PATH."
+
+[hooks]
+pre_run = []
+post_run = []
+
+[extract]
+persist = true
