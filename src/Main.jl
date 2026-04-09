@@ -899,7 +899,12 @@ Captures ALL mutable state across all modules:
   - arousal     (EyeSystem arousal state: level, decay, baseline)
   - counters    (NODE ID_COUNTER + MSG_ID_COUNTER)
   - brainstem   (dispatch count, propagation history)
+  - attachments (ATTACHMENT_MAP relational fire system)
+  - trajectory  (ActionTonePredictor ring buffer + config)
+  - temporal    (ImageSDF TEMPORAL_COHERENCE_LEDGER timing patterns)
+  - cooldowns   (ChatterMode MORPH_COOLDOWN_MAP 24h morph timestamps)
 
+Format: v2.1 (backward-compatible with v2.0 on load).
 Returns a formatted summary string.
 """
 function save_specimen_to_file!(filepath::String)::String
@@ -959,7 +964,10 @@ function save_specimen_to_file!(filepath::String)::String
     specimen["hopfield_cache"] = hopfield_entries
 
     # ── 3. RULES (AIML_DROP_TABLE) ────────────────────────────────────────
-    rule_list = [Dict{String, Any}("text" => r.rule_text, "prob" => r.fire_prob) for r in AIML_DROP_TABLE]
+    # GRUG: r.text and r.fire_probability are the actual struct field names.
+    # Academic: Previously used r.rule_text / r.fire_prob which would cause a
+    # Julia field access error at runtime. Fixed in v2.1.
+    rule_list = [Dict{String, Any}("text" => r.text, "prob" => r.fire_probability) for r in AIML_DROP_TABLE]
     specimen["rules"] = rule_list
 
     # ── 4. MESSAGE HISTORY ────────────────────────────────────────────────
@@ -1122,11 +1130,71 @@ function save_specimen_to_file!(filepath::String)::String
     end
     specimen["attachments"] = attachment_list
 
-    # ── METADATA ──────────────────────────────────────────────────────────
+
+    # ── 15. TRAJECTORY STATE (ActionTonePredictor) ────────────────
+    # GRUG: Save the trajectory ring buffer + config knobs.
+    # Academic: The trajectory buffer tracks the system's path through
+    # action-tone space. Without persistence, Lorenz attractor damping
+    # resets on every load — the specimen forgets its behavioral inertia.
+    trajectory_data = Dict{String, Any}()
+    lock(ActionTonePredictor._trajectory_lock) do
+        config = ActionTonePredictor._trajectory_config[]
+        trajectory_data["config"] = Dict{String, Any}(
+            "buffer_size"         => config.buffer_size,
+            "decay_halflife"      => config.decay_halflife,
+            "gini_threshold"      => config.gini_threshold,
+            "damping_strength"    => config.damping_strength,
+            "softmax_temperature" => config.softmax_temperature
+        )
+        buf_entries = Dict{String, Any}[]
+        for entry in ActionTonePredictor._trajectory_buffer
+            push!(buf_entries, Dict{String, Any}(
+                "action_dist" => Dict(string(k) => v for (k, v) in entry.action_dist),
+                "tone_dist"   => Dict(string(k) => v for (k, v) in entry.tone_dist),
+                "timestamp"   => entry.timestamp
+            ))
+        end
+        trajectory_data["buffer"] = buf_entries
+    end
+    specimen["trajectory"] = trajectory_data
+
+    # ── 16. TEMPORAL COHERENCE LEDGER (ImageSDF) ──────────────────
+    # GRUG: Save the SDF timing patterns so temporal coherence survives reload.
+    # Academic: Without this, the coherence_score for every SDF resets to zero
+    # on load, destroying the temporal stability model for image nodes.
+    tcl_list = Dict{String, Any}[]
+    lock(ImageSDF.TCL_LOCK) do
+        for (sdf_id, rec) in ImageSDF.TEMPORAL_COHERENCE_LEDGER
+            push!(tcl_list, Dict{String, Any}(
+                "sdf_id"          => rec.sdf_id,
+                "last_fired"      => rec.last_fired,
+                "fire_count"      => rec.fire_count,
+                "avg_interval"    => rec.avg_interval,
+                "coherence_score" => rec.coherence_score
+            ))
+        end
+    end
+    specimen["temporal_coherence"] = tcl_list
+
+    # ── 17. MORPH COOLDOWN MAP (ChatterMode) ─────────────────────
+    # GRUG: Save the 24h morph cooldown timestamps so morphed nodes stay on cooldown after reload.
+    # Academic: Without persistence, a save/load cycle would reset all cooldowns,
+    # allowing nodes to morph again immediately — violating the 24h invariant.
+    cooldown_data = Dict{String, Any}()
+    lock(ChatterMode.MORPH_COOLDOWN_LOCK) do
+        for (node_id, ts) in ChatterMode.MORPH_COOLDOWN_MAP
+            cooldown_data[node_id] = ts
+        end
+    end
+    specimen["morph_cooldowns"] = cooldown_data
+
+    # ── METADATA ──────────────────────────────────────────────────
+    # GRUG: Version bumped to 2.1 — added trajectory, temporal_coherence, morph_cooldowns.
+    # Academic: v2.1 is backward-compatible with v2.0 on load (new keys are optional).
     specimen["_meta"] = Dict{String, Any}(
-        "version"    => "2.0",
+        "version"    => "2.1",
         "saved_at"   => time(),
-        "format"     => "grugbot420-specimen-v2"
+        "format"     => "grugbot420-specimen-v2.1"
     )
 
     # ── SERIALIZE + COMPRESS ──────────────────────────────────────────────
@@ -1171,6 +1239,9 @@ function save_specimen_to_file!(filepath::String)::String
     push!(lines, "  🔤  Thesaurus words  : $(length(thesaurus_data))")
     push!(lines, "  🚫  Inhibitions      : $(length(inhib_list))")
     push!(lines, "  🔗  Attachments      : $(length(attachment_list))")
+    push!(lines, "  🔮  Trajectory entries : $(length(get(trajectory_data, \"buffer\", [])))")
+    push!(lines, "  🕐  Temporal coherence : $(length(tcl_list))")
+    push!(lines, "  ⏳  Morph cooldowns    : $(length(cooldown_data))")
     push!(lines, "  👁   Arousal          : $(arousal_data["level"])")
     push!(lines, "╚══════════════════════════════════════════════════════════════╝")
     return join(lines, "\n")
@@ -1248,7 +1319,8 @@ function load_specimen_from_file!(filepath::String)::String
     allowed_keys = Set(["nodes", "hopfield_cache", "rules", "message_history",
                         "lobes", "node_to_lobe_idx", "lobe_tables",
                         "verb_registry", "thesaurus_seeds", "inhibitions",
-                        "arousal", "id_counters", "brainstem", "attachments", "_meta"])
+                        "arousal", "id_counters", "brainstem", "attachments",
+                        "trajectory", "temporal_coherence", "morph_cooldowns", "_meta"])
     for key in keys(specimen)
         if !(key in allowed_keys)
             push!(validation_errors, "Unknown top-level key '$key'")
@@ -1256,14 +1328,15 @@ function load_specimen_from_file!(filepath::String)::String
     end
 
     # GRUG: Type checks for critical array sections
-    for k in ["nodes", "hopfield_cache", "rules", "message_history", "lobes", "lobe_tables", "inhibitions"]
+    for k in ["nodes", "hopfield_cache", "rules", "message_history", "lobes", "lobe_tables", "inhibitions", "temporal_coherence"]
         if haskey(specimen, k) && !isa(specimen[k], AbstractVector)
             push!(validation_errors, "'$k' must be an array")
         end
     end
 
     # GRUG: Type checks for critical dict sections
-    for k in ["node_to_lobe_idx", "verb_registry", "thesaurus_seeds", "arousal", "id_counters", "brainstem", "_meta"]
+    for k in ["node_to_lobe_idx", "verb_registry", "thesaurus_seeds", "arousal", "id_counters", "brainstem",
+             "trajectory", "morph_cooldowns", "_meta"]
         if haskey(specimen, k) && !isa(specimen[k], Dict)
             push!(validation_errors, "'$k' must be an object")
         end
@@ -1358,6 +1431,26 @@ function load_specimen_from_file!(filepath::String)::String
         empty!(ATTACHMENT_MAP)
     end
 
+
+    # Wipe trajectory state (ActionTonePredictor)
+    # GRUG: Reset the trajectory ring buffer and config back to defaults.
+    lock(ActionTonePredictor._trajectory_lock) do
+        empty!(ActionTonePredictor._trajectory_buffer)
+        ActionTonePredictor._trajectory_config[] = ActionTonePredictor.DEFAULT_TRAJECTORY_CONFIG
+    end
+
+    # Wipe temporal coherence ledger (ImageSDF)
+    # GRUG: Clear all SDF timing patterns. Fresh start for image coherence.
+    lock(ImageSDF.TCL_LOCK) do
+        empty!(ImageSDF.TEMPORAL_COHERENCE_LEDGER)
+    end
+
+    # Wipe morph cooldown map (ChatterMode)
+    # GRUG: Clear all morph cooldowns. Specimen will bring its own.
+    lock(ChatterMode.MORPH_COOLDOWN_LOCK) do
+        empty!(ChatterMode.MORPH_COOLDOWN_MAP)
+    end
+
     println("  ✅ Cave wiped clean. Beginning restore...")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1365,7 +1458,8 @@ function load_specimen_from_file!(filepath::String)::String
     # GRUG: Rebuild the cave brick by brick. Order matters here:
     # ID counters -> verb registry -> thesaurus -> lobes -> lobe tables ->
     # nodes -> node_to_lobe_idx -> hopfield cache -> rules -> inhibitions ->
-    # messages -> arousal -> brainstem
+    # messages -> arousal -> brainstem -> attachments -> trajectory ->
+    # temporal_coherence -> morph_cooldowns
     # ══════════════════════════════════════════════════════════════════════
 
     counts = Dict{String,Int}()
@@ -1728,6 +1822,128 @@ function load_specimen_from_file!(filepath::String)::String
         end
         counts["attachments"] = n_attachments
         println("  🔗 Attachments restored ($n_attachments)")
+    end
+
+
+    # ── 4.15 TRAJECTORY STATE (ActionTonePredictor) ───────────────
+    # GRUG: Restore the trajectory ring buffer and config from specimen.
+    # Academic: Backward-compatible — if key is missing (v2.0 specimen),
+    # trajectory stays at defaults. No error, no silent corruption.
+    n_trajectory = 0
+    if haskey(specimen, "trajectory") && isa(specimen["trajectory"], Dict)
+        traj = specimen["trajectory"]
+        lock(ActionTonePredictor._trajectory_lock) do
+            # Restore config if present
+            if haskey(traj, "config") && isa(traj["config"], Dict)
+                tc = traj["config"]
+                try
+                    ActionTonePredictor._trajectory_config[] = ActionTonePredictor.TrajectoryConfig(
+                        Int(get(tc, "buffer_size", 16)),
+                        Float64(get(tc, "decay_halflife", 120.0)),
+                        Float64(get(tc, "gini_threshold", 0.72)),
+                        Float64(get(tc, "damping_strength", 0.25)),
+                        Float64(get(tc, "softmax_temperature", 1.5))
+                    )
+                catch e
+                    @warn "loadSpecimen: bad trajectory config, using defaults: $e"
+                    ActionTonePredictor._trajectory_config[] = ActionTonePredictor.DEFAULT_TRAJECTORY_CONFIG
+                end
+            end
+            # Restore buffer entries
+            if haskey(traj, "buffer") && isa(traj["buffer"], AbstractVector)
+                for bentry in traj["buffer"]
+                    try
+                        # GRUG: Enum keys are stored as strings — parse them back.
+                        # Academic: ActionFamily/ToneFamily are @enum types. We
+                        # build safe lookup tables from instances() — no eval(), no injection risk.
+                        action_d = Dict{ActionTonePredictor.ActionFamily, Float64}()
+                        action_lookup = Dict(string(f) => f for f in instances(ActionTonePredictor.ActionFamily))
+                        for (k, v) in bentry["action_dist"]
+                            sk = String(k)
+                            if !haskey(action_lookup, sk)
+                                error("Unknown ActionFamily value: '$sk'")
+                            end
+                            action_d[action_lookup[sk]] = Float64(v)
+                        end
+                        tone_d = Dict{ActionTonePredictor.ToneFamily, Float64}()
+                        tone_lookup = Dict(string(f) => f for f in instances(ActionTonePredictor.ToneFamily))
+                        for (k, v) in bentry["tone_dist"]
+                            sk = String(k)
+                            if !haskey(tone_lookup, sk)
+                                error("Unknown ToneFamily value: '$sk'")
+                            end
+                            tone_d[tone_lookup[sk]] = Float64(v)
+                        end
+                        push!(ActionTonePredictor._trajectory_buffer,
+                            ActionTonePredictor.TrajectoryEntry(action_d, tone_d, Float64(bentry["timestamp"]))
+                        )
+                        n_trajectory += 1
+                    catch e
+                        @warn "loadSpecimen: skipping bad trajectory entry: $e"
+                    end
+                end
+            end
+        end
+        counts["trajectory_entries"] = n_trajectory
+        println("  🔮 Trajectory restored ($n_trajectory entries)")
+    end
+
+    # ── 4.16 TEMPORAL COHERENCE LEDGER (ImageSDF) ─────────────────
+    # GRUG: Restore SDF timing patterns from specimen.
+    # Academic: Backward-compatible — missing key means no temporal coherence
+    # history, which is the same as a fresh specimen. No error.
+    n_tcl = 0
+    if haskey(specimen, "temporal_coherence") && isa(specimen["temporal_coherence"], AbstractVector)
+        lock(ImageSDF.TCL_LOCK) do
+            for tentry in specimen["temporal_coherence"]
+                try
+                    sdf_id = String(tentry["sdf_id"])
+                    if strip(sdf_id) == ""
+                        error("empty sdf_id in temporal coherence entry")
+                    end
+                    rec = ImageSDF.TemporalCoherenceRecord(
+                        sdf_id,
+                        Float64(get(tentry, "last_fired", 0.0)),
+                        Int(get(tentry, "fire_count", 0)),
+                        Float64(get(tentry, "avg_interval", 0.0)),
+                        Float64(get(tentry, "coherence_score", 0.0))
+                    )
+                    ImageSDF.TEMPORAL_COHERENCE_LEDGER[sdf_id] = rec
+                    n_tcl += 1
+                catch e
+                    @warn "loadSpecimen: skipping bad temporal coherence entry: $e"
+                end
+            end
+        end
+        counts["temporal_coherence"] = n_tcl
+        println("  🕐 Temporal coherence restored ($n_tcl entries)")
+    end
+
+    # ── 4.17 MORPH COOLDOWN MAP (ChatterMode) ────────────────────
+    # GRUG: Restore the 24h morph cooldown timestamps from specimen.
+    # Academic: Backward-compatible — missing key means no active cooldowns,
+    # which is correct for v2.0 specimens that never tracked this.
+    n_cooldowns = 0
+    if haskey(specimen, "morph_cooldowns") && isa(specimen["morph_cooldowns"], Dict)
+        lock(ChatterMode.MORPH_COOLDOWN_LOCK) do
+            for (node_id, ts) in specimen["morph_cooldowns"]
+                try
+                    nid = String(node_id)
+                    timestamp = Float64(ts)
+                    # GRUG: Only restore cooldowns that are still within the 24h window.
+                    # Academic: Stale cooldowns (older than MORPH_COOLDOWN_SECONDS) are
+                    # silently discarded — they would expire immediately anyway.
+                    if (time() - timestamp) < ChatterMode.MORPH_COOLDOWN_SECONDS
+                        ChatterMode.MORPH_COOLDOWN_MAP[nid] = timestamp
+                        n_cooldowns += 1
+                    end
+                catch e
+                    @warn "loadSpecimen: skipping bad morph cooldown entry: $e"
+                end
+            end
+        end
+        counts["morph_cooldowns"] = n_cooldowns
+        println("  ⏳ Morph cooldowns restored ($n_cooldowns active)")
     end
 
     # ══════════════════════════════════════════════════════════════════════
@@ -2114,6 +2330,9 @@ function run_cli()
                 println("  Hopfield cache  : $(length(HOPFIELD_CACHE)) entries")
                 println("  Memory messages : $(length(MESSAGE_HISTORY))")
                 println("  Est. memory use : ~$(est_total_kb) KB")
+    push!(lines, "  🔮  Trajectory entries : $(get(counts, \"trajectory_entries\", 0))")
+    push!(lines, "  🕐  Temporal coherence : $(get(counts, \"temporal_coherence\", 0))")
+    push!(lines, "  ⏳  Morph cooldowns    : $(get(counts, \"morph_cooldowns\", 0))")
                 println("  Current arousal : $(round(EyeSystem.get_arousal(), digits=3))")
                 println("  Last input ago  : $(round(time() - LAST_INPUT_TIME[], digits=1))s")
                 println("║  LOBES                                           ║")
@@ -2717,7 +2936,7 @@ end
 # transplant — current state is WIPED and replaced with the specimen contents.
 # Together they provide long-term persistence for GrugBot instances.
 #
-# State categories captured (13 total):
+# State categories captured (17 total, v2.1):
 #   1. nodes          — full Node structs (id, pattern, signal, action_packet,
 #                       strength, neighbors, graves, drop_table, response_times,
 #                       hopfield_key, relational_patterns, etc.)
@@ -2733,12 +2952,18 @@ end
 #  11. arousal        — EyeSystem arousal state (level, decay_rate, baseline)
 #  12. id_counters    — NODE ID_COUNTER + MSG_ID_COUNTER atomic values
 #  13. brainstem      — dispatch count, propagation history
+#  14. attachments    — ATTACHMENT_MAP relational fire system
+#  15. trajectory     — ActionTonePredictor ring buffer + config (Lorenz damping)
+#  16. temporal_coherence — ImageSDF TEMPORAL_COHERENCE_LEDGER timing patterns
+#  17. morph_cooldowns — ChatterMode MORPH_COOLDOWN_MAP 24h timestamps
 #
 # /loadSpecimen is DESTRUCTIVE: validates the entire file structure BEFORE
 # wiping any state. If validation fails, ZERO changes are made. Restore order
 # is deliberate: counters → verbs → thesaurus → lobes → lobe_tables → nodes →
 # node_to_lobe_idx → hopfield → rules → inhibitions → messages → arousal →
-# brainstem. Each restore step is individually wrapped in try/catch with FATAL
-# error reporting. File format: gzip-compressed JSON (system gzip/gunzip via
-# pipeline, no extra Julia packages required).
+# brainstem → attachments → trajectory → temporal_coherence → morph_cooldowns.
+# Each restore step is individually wrapped in try/catch with FATAL error
+# reporting. v2.1 keys are optional on load for backward compat with v2.0.
+# File format: gzip-compressed JSON (system gzip/gunzip via pipeline,
+# no extra Julia packages required).
 # ==============================================================================

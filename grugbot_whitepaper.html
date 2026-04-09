@@ -207,6 +207,7 @@ and self-maintaining phagy cycles.</p>
     <h3 style="margin-top:0;">Table of Contents</h3>
     <ul>
         <li><a href="#overview">1. Overview & Philosophy</a></li>
+        <li><a href="#install">1.1 Installation (Binary)</a> <span class="new-badge">v7.4</span></li>
         <li><a href="#architecture">2. System Architecture</a></li>
         <li><a href="#nodes">3. Nodes: The Atomic Unit</a></li>
         <li><a href="#action-packets">4. Action Packets v2 (Pipe-Delimited)</a> <span class="new-badge">v7</span></li>
@@ -259,6 +260,67 @@ natural selection, and cross-domain cascade activation across specialized brain 
 </div>
 
 <!-- ================================================================ -->
+
+<!-- ================================================================ -->
+<h2 id="install">1.1 Installation (Binary) <span class="new-badge">v7.4</span></h2>
+
+<div class="grug-box">
+    Grug made binary. One file. You run it. That's it. No compile, no dependency hell,
+    no "just install these 47 packages first". Download rock, throw rock, rock works.
+</div>
+
+<h3>Prebuilt Binary (Recommended)</h3>
+<p>The fastest way to run GrugBot is the prebuilt self-extracting binary, built with
+<a href="https://github.com/marshalldavidson61-arch/Bindboss">bindboss</a>. It packs the
+entire Julia source tree into a single ELF executable with built-in dependency checking.</p>
+
+<pre><code># 1. Download the binary from the grug-binary/ directory
+wget https://raw.githubusercontent.com/marshalldavidson61-arch/grugbot420/main/grug-binary/grugbot420
+
+# 2. Make it executable
+chmod +x grugbot420
+
+# 3. Run it
+./grugbot420</code></pre>
+
+<h4>What happens on first run</h4>
+<ol>
+    <li>The binary checks for <code>julia</code> on your PATH</li>
+    <li>If Julia is missing, it prints the download URL and exits cleanly</li>
+    <li>If Julia is found, it extracts the source to <code>~/.bindboss/grugbot420/</code> and launches</li>
+    <li>Subsequent runs skip extraction (persisted) and go straight to the <code>Brain ></code> prompt</li>
+</ol>
+
+<h4>Requirements</h4>
+<ul>
+    <li><strong>Julia 1.9+</strong> &mdash; <a href="https://julialang.org/downloads/">https://julialang.org/downloads/</a></li>
+    <li><strong>Linux x86_64</strong> (Debian/Ubuntu recommended)</li>
+    <li>~50 MB free disk space for extraction cache</li>
+</ul>
+
+<h4>Resetting the extraction cache</h4>
+<pre><code># If you need a fresh extraction (e.g. after updating the binary):
+rm -rf ~/.bindboss/grugbot420/
+./grugbot420</code></pre>
+
+<div class="academic-box">
+    The binary is built with <strong>bindboss v0.2.0</strong>, which uses a v2 trailer format with
+    SHA-256 integrity hashing and optional Ed25519 signing. The stub is a statically-linked Go binary
+    (~3.4 MB) that handles extraction, dependency checking, and launch. The packed payload is the
+    complete <code>src/</code> directory, gzip-compressed inside the executable.
+    <br><br>
+    <strong>COMING SOON:</strong> Native Linux package repository distribution (APT/DNF). The binary
+    will be available directly via <code>apt install grugbot420</code> on Debian-based systems.
+</div>
+
+<h3>From Source (Advanced)</h3>
+<pre><code># Clone the repo
+git clone https://github.com/marshalldavidson61-arch/grugbot420.git
+cd grugbot420/src
+
+# Run directly with Julia
+julia Main.jl</code></pre>
+
 <h2 id="architecture">2. System Architecture</h2>
 
 <div class="flow-chart">
@@ -839,7 +901,7 @@ time, share it with others, or restore it later on a different machine.</p>
 <h3>Processing Details</h3>
 
 <div class="academic-box">
-    <p><strong>Save process:</strong> Serializes all 13 state categories into a single JSON object, then
+    <p><strong>Save process:</strong> Serializes all 17 state categories into a single JSON object, then
     gzip-compresses via system <code>gzip</code> pipeline (no extra Julia packages). Pretty-printed JSON
     with indent=2 for human readability when decompressed.</p>
 
@@ -847,8 +909,8 @@ time, share it with others, or restore it later on a different machine.</p>
     <ol>
         <li><strong>Read + Decompress + Parse:</strong> Read gzip file, decompress via <code>gunzip</code>, parse JSON</li>
         <li><strong>Validate Structure:</strong> Check all top-level keys and types. Spot-check node entries. If anything is wrong, reject the entire file — zero changes made.</li>
-        <li><strong>Wipe Current State:</strong> Lock and clear all 13 mutable state categories</li>
-        <li><strong>Restore All State:</strong> Rebuild in dependency order: counters &rarr; verbs &rarr; thesaurus &rarr; lobes &rarr; lobe_tables &rarr; nodes &rarr; node_to_lobe_idx &rarr; hopfield &rarr; rules &rarr; inhibitions &rarr; messages &rarr; arousal &rarr; brainstem</li>
+        <li><strong>Wipe Current State:</strong> Lock and clear all 17 mutable state categories</li>
+        <li><strong>Restore All State:</strong> Rebuild in dependency order: counters &rarr; verbs &rarr; thesaurus &rarr; lobes &rarr; lobe_tables &rarr; nodes &rarr; node_to_lobe_idx &rarr; hopfield &rarr; rules &rarr; inhibitions &rarr; messages &rarr; arousal &rarr; brainstem &rarr; attachments &rarr; trajectory &rarr; temporal_coherence &rarr; morph_cooldowns</li>
         <li><strong>Build Summary:</strong> Print formatted summary table with per-category counts</li>
     </ol>
 </div>
@@ -1228,7 +1290,7 @@ The signal is not in the wire. Only the computation is. And the computation was 
 <h3>Specimen Persistence <span class="new-badge">v7</span></h3>
 <table>
     <tr><th>Command</th><th>Description</th></tr>
-    <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 14 state categories (including attachments).</td></tr>
+    <tr><td><code>/saveSpecimen <filepath></code></td><td>Save full cave state to gzip-compressed JSON file. Captures all 17 state categories (including attachments).</td></tr>
     <tr><td><code>/loadSpecimen <filepath></code></td><td>Restore full cave state from specimen file. Destructive: wipes current state first. Validates before wiping.</td></tr>
 </table>
 
@@ -1313,11 +1375,23 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
 <!-- ================================================================ -->
 <div style="margin-top: 60px; border-top: 2px solid #333; padding-top: 30px;">
     <h2 style="color: #00ff88; border: none; padding: 0;">Changelog</h2>
+    <h3>v7.4 — Persistence Completeness</h3>
+    <ul>
+        <li>Fixed StochasticRule field name bug in <code>/saveSpecimen</code> (r.rule_text → r.text, r.fire_prob → r.fire_probability)</li>
+        <li>Added trajectory state persistence (ActionTonePredictor ring buffer + config) — section 15</li>
+        <li>Added temporal coherence ledger persistence (ImageSDF timing patterns) — section 16</li>
+        <li>Added morph cooldown map persistence (ChatterMode 24h timestamps) — section 17</li>
+        <li>Specimen format bumped to v2.1 (backward-compatible with v2.0 on load)</li>
+        <li>Safe enum deserialization via lookup tables (no eval)</li>
+        <li>Expired morph cooldowns automatically pruned on load</li>
+        <li>Prebuilt binary rebuilt with bindboss v0.2.0</li>
+        <li>Added binary installation section to whitepaper</li>
+    </ul>
     <h4>v7.2 (Current)</h4>
     <ul>
         <li>Relational Fire System: <code>/nodeAttach</code>, <code>/nodeDetach</code>, <code>/attachments</code> &mdash; user-defined relay circuitry with strength-biased coinflip gating</li>
         <li>Pass 3 in <code>scan_and_expand()</code>: attachment relay with independent active cap, pattern-derived confidence, deduplication</li>
-        <li>Specimen persistence extended to 14 state categories (section 14: attachments)</li>
+        <li>Specimen persistence extended to 17 state categories (sections 14-17: attachments, trajectory, temporal coherence, morph cooldowns)</li>
         <li><code>AttachedNode</code> struct with pre-baked signal vectors for zero-allocation hot-path firing</li>
         <li>Full validation on attach/detach: existence, grave, self-attach, max cap, duplicate checks &mdash; no silent failures</li>
         <li>Updated BOOT_MSG, HELP_MSG, <code>/nodes</code> output, and all documentation</li>
@@ -1343,7 +1417,7 @@ julia live_training_test.jl  # Multi-lobe training (12+ pass, 0 hard fail)</code
         <li>20 new science/philosophy synonym groups in Thesaurus</li>
         <li>Eliminated all silent catch blocks (replaced with @warn logging)</li>
         <li>New test suites: test_input_queue.jl (1,095 assertions), test_action_packet.jl (111 assertions), test_load_specimen.jl (102 assertions)</li>
-        <li>Specimen persistence: <code>/saveSpecimen</code> + <code>/loadSpecimen</code> &mdash; full cave state save/restore via gzip-compressed JSON covering 13 state categories</li>
+        <li>Specimen persistence: <code>/saveSpecimen</code> + <code>/loadSpecimen</code> &mdash; full cave state save/restore via gzip-compressed JSON covering 17 state categories (v2.1)</li>
         <li>Thesaurus runtime seed injection: <code>add_seed_synonym!()</code> for dynamic synonym registration</li>
         <li>Updated /help command, boot message, and architectural spec</li>
         <li>§17.5 Signal Presence & Instant Activation: ambient field model, resolution latency vs. transmission latency, entanglement principle, quorum settlement as collapse speed, hardware correspondence</li>

@@ -95,7 +95,7 @@ Requires [Julia 1.9+](https://julialang.org/downloads/) on your PATH. First run 
 
 | Command | What it does |
 |---|---|
-| `/saveSpecimen <filepath>` | Freeze the entire cave state to a gzip-compressed JSON file. Every node, lobe, rule, message, verb, thesaurus entry, inhibition, attachment, arousal level — everything. |
+| `/saveSpecimen <filepath>` | Freeze the entire cave state to a gzip-compressed JSON file. Every node, lobe, rule, message, verb, thesaurus entry, inhibition, attachment, arousal level, trajectory state, temporal coherence, and morph cooldowns — everything. |
 | `/loadSpecimen <filepath>` | Restore the entire cave state from a previously saved specimen file. **Destructive** — current state is wiped and replaced (full brain transplant). |
 
 ### Help
@@ -155,7 +155,7 @@ GrugBot supports full long-term persistence via specimen files. A specimen file 
 /saveSpecimen mycave.specimen.gz
 ```
 
-This freezes the entire cave state into `mycave.specimen.gz`. The file contains compressed JSON covering all 13 state categories.
+This freezes the entire cave state into `mycave.specimen.gz`. The file contains compressed JSON covering all 17 state categories (v2.1 format).
 
 ### Loading (Restoring)
 
@@ -185,10 +185,13 @@ The file is validated before any state is wiped. If validation fails, zero chang
 | 12 | **id_counters** | NODE ID_COUNTER and MSG_ID_COUNTER atomic values |
 | 13 | **brainstem** | BrainStem dispatch count and propagation history |
 | 14 | **attachments** | ATTACHMENT_MAP — target→attached node mappings with patterns and pre-baked signal vectors |
+| 15 | **trajectory** | ActionTonePredictor ring buffer + config — behavioral inertia through action-tone space (Lorenz damping) |
+| 16 | **temporal_coherence** | ImageSDF TEMPORAL_COHERENCE_LEDGER — SDF timing patterns and coherence scores |
+| 17 | **morph_cooldowns** | ChatterMode MORPH_COOLDOWN_MAP — 24h morph cooldown timestamps per node |
 
 ### Restore order
 
-`id_counters` → `verb_registry` → `thesaurus_seeds` → `lobes` → `lobe_tables` → `nodes` → `node_to_lobe_idx` → `hopfield_cache` → `rules` → `inhibitions` → `message_history` → `arousal` → `brainstem` → `attachments`
+`id_counters` → `verb_registry` → `thesaurus_seeds` → `lobes` → `lobe_tables` → `nodes` → `node_to_lobe_idx` → `hopfield_cache` → `rules` → `inhibitions` → `message_history` → `arousal` → `brainstem` → `attachments` → `trajectory` → `temporal_coherence` → `morph_cooldowns`
 
 This ensures upstream entities exist before downstream references (e.g., lobes exist before nodes reference them).
 
