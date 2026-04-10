@@ -1,0 +1,1652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>bindboss — The Guide</title>
+<link rel="stylesheet" href="bindboss.css">
+<script src="https://sites.super.myninja.ai/_assets/ninja-daytona-script.js"></script>
+</head>
+<body>
+
+<!-- ============================================================
+     SIDEBAR
+     ============================================================ -->
+<aside id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-logo">bind<span>boss</span></div>
+    <div class="sidebar-tagline">Pack any directory into a binary</div>
+    <div class="sidebar-version">v0.2+ · install wizard edition</div>
+  </div>
+  <nav>
+    <div class="nav-section">Getting Started</div>
+    <a href="#intro">What is bindboss?</a>
+    <a href="#install">Installation</a>
+    <a href="#quickstart">Quick Start</a>
+
+    <div class="nav-section">Core Concepts</div>
+    <a href="#how-it-works">How it works</a>
+    <a href="#bindboss-toml">bindboss.toml</a>
+    <a href="#payload-format">Payload format</a>
+
+    <div class="nav-section">Commands</div>
+    <a href="#cmd-pack">pack</a>
+    <a href="#cmd-inspect">inspect</a>
+    <a href="#cmd-verify">verify</a>
+    <a href="#cmd-keygen">keygen</a>
+    <a href="#cmd-reset">reset</a>
+
+    <div class="nav-section">Install Wizard</div>
+    <a href="#wizard-overview">Overview</a>
+    <a href="#wizard-json">install.json schema</a>
+    <a href="#wizard-steps">Step types</a>
+    <a href="#wizard-deps">Dep definitions</a>
+    <a href="#wizard-nav">Navigation</a>
+    <a href="#wizard-inline">Inline vs file config</a>
+
+    <div class="nav-section">Real-World Examples</div>
+    <a href="#ex-python">Python app</a>
+    <a href="#ex-julia">Julia app (grugbot)</a>
+    <a href="#ex-bun">Bun / Node app</a>
+    <a href="#ex-shell">Shell script bundle</a>
+    <a href="#ex-signed">Signed release</a>
+    <a href="#ex-crosscompile">Cross-compile</a>
+
+    <div class="nav-section">Advanced</div>
+    <a href="#adv-hooks">Pre/post hooks</a>
+    <a href="#adv-exec-mode">exec vs fork mode</a>
+    <a href="#adv-persist">Persist extraction</a>
+    <a href="#adv-env">Environment vars</a>
+    <a href="#adv-signing">Signing & verification</a>
+    <a href="#adv-library">Go library API</a>
+
+    <div class="nav-section">Reference</div>
+    <a href="#ref-toml">Full TOML reference</a>
+    <a href="#ref-flags">All CLI flags</a>
+    <a href="#ref-wizard-schema">Full wizard schema</a>
+    <a href="#ref-errors">Error messages</a>
+    <a href="#ref-compat">Compatibility</a>
+  </nav>
+</aside>
+
+<!-- ============================================================
+     MAIN CONTENT
+     ============================================================ -->
+<main id="main">
+<div class="content-wrap">
+
+<!-- ============================================================
+     HERO
+     ============================================================ -->
+<div class="hero" id="top">
+  <div class="hero-title">bind<span>boss</span> — The Guide</div>
+  <div class="hero-sub">Pack any directory into a single self-extracting binary. Dep checking, hash verification, install wizard, hooks, signing. One command.</div>
+  <div class="hero-cmd"><span class="prompt">$ </span>bindboss pack ./myapp myapp --run="python main.py" --needs="python3,python3 --version,https://python.org"
+<span class="prompt">$ </span>./myapp   <span style="color:#8b949e"># works on any machine. no install. deps checked on first run.</span></div>
+</div>
+
+<!-- ============================================================
+     WHAT IS BINDBOSS
+     ============================================================ -->
+<section class="section" id="intro">
+<h1>What is bindboss?</h1>
+
+<p>bindboss takes a directory full of code, data, scripts — whatever you want — and packages it into a <strong>single self-extracting binary</strong>. When someone runs that binary, it unpacks itself into a temp directory, optionally checks and installs dependencies, then executes your run command. The end user never interacts with bindboss directly.</p>
+
+<p>It was built to solve the "Julia is painful to bundle" problem, but it works for any runtime: Python, Bun, Node, Ruby, shell scripts, compiled apps that need data files alongside them — anything.</p>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Grug have directory. Directory have app. Grug want to give app to friend. Friend not want to install 47 things first. Grug use bindboss. Grug give friend one file. Friend run file. App run. Friend happy. Grug happy. No PhD needed.</div>
+</div>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic</div>
+  <div class="box-body">bindboss implements a <em>self-contained executable distribution</em> pattern: a statically compiled stub binary acts as a runtime loader, with the application payload appended as a <code>tar.gz</code> archive. At execution time, the stub extracts the payload to a temporary or persistent directory and <code>execve(2)</code>s the configured run command, replacing itself with the target process. This eliminates the traditional extraction/installer step entirely from the user's perspective.</div>
+</div>
+
+<h2>What it is NOT</h2>
+<ul>
+  <li>Not a container runtime (no kernel namespacing, no image layers)</li>
+  <li>Not a package manager (it doesn't version-resolve deps)</li>
+  <li>Not a compiler or bundler (it doesn't compile your code)</li>
+  <li>Not a virtual machine or interpreter</li>
+</ul>
+<p>It is a <strong>packer</strong>. It puts your files inside a binary. The binary unpacks them and runs your command. That's the whole thing.</p>
+</section>
+
+<!-- ============================================================
+     INSTALLATION
+     ============================================================ -->
+<section class="section" id="install">
+<h1>Installation</h1>
+
+<h2>Option A: Go install (easiest)</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>go install github.com/marshalldavidson61-arch/bindboss@latest</pre>
+</div>
+<p>This compiles bindboss and puts it in your <code>$GOPATH/bin</code>. Requires Go 1.22.3 or later.</p>
+
+<h2>Option B: Build from source</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>git clone https://github.com/marshalldavidson61-arch/Bindboss
+cd Bindboss
+go build -o bindboss .
+sudo mv bindboss /usr/local/bin/    <span class="c"># optional: make it available system-wide</span></pre>
+</div>
+
+<h2>Option C: Use the pre-built binary</h2>
+<p>A pre-built binary is included in the repository at the root level. Download it and make it executable:</p>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>curl -L https://github.com/marshalldavidson61-arch/Bindboss/raw/main/bindboss -o bindboss
+chmod +x bindboss
+./bindboss pack --help</pre>
+</div>
+
+<div class="tip-box">
+  <div class="box-label">✓ Tip</div>
+  <div class="box-body">When bindboss runs <code>pack</code>, it needs to compile the stub binary using <code>go build</code>. So even if you use Option C, <strong>Go must be installed on the machine doing the packing</strong>. The <em>end user</em> running the packed binary does NOT need Go.</div>
+</div>
+
+<h2>Verify installation</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>bindboss</pre>
+</div>
+<p>You should see the command listing. If you get "command not found", make sure your <code>$GOPATH/bin</code> is in your <code>$PATH</code>.</p>
+</section>
+
+<!-- ============================================================
+     QUICK START
+     ============================================================ -->
+<section class="section" id="quickstart">
+<h1>Quick Start</h1>
+
+<p>The fastest path from zero to a working packed binary. We'll pack a tiny Python app.</p>
+
+<h2>1. Have a directory with your app in it</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>mkdir myapp && cat > myapp/main.py <<'EOF'
+print("Hello from inside the binary!")
+import sys
+print(f"Python {sys.version}")
+EOF</pre>
+</div>
+
+<h2>2. Pack it</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>bindboss pack ./myapp myapp-bin --run="python3 main.py"</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Output</span>
+    <span class="example-title">What you'll see</span>
+  </div>
+  <div class="example-output">
+    <div class="example-output-label">Terminal</div>
+    <pre>[bindboss] compiling stub for linux/amd64...
+[bindboss] packing ./myapp into myapp-bin...
+[bindboss] ✓ packed: myapp-bin (3.8 MB)
+[bindboss]   run command: python3 main.py
+[bindboss]   hash: yes (SHA-256, unsigned)</pre>
+  </div>
+</div>
+
+<h2>3. Run it</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>chmod +x myapp-bin
+./myapp-bin</pre>
+</div>
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Output</span>
+    <span class="example-title">First run</span>
+  </div>
+  <div class="example-output">
+    <div class="example-output-label">Terminal</div>
+    <pre>Hello from inside the binary!
+Python 3.11.4 (main, Jul  5 2023, 13:45:01) [GCC 11.3.0]</pre>
+  </div>
+</div>
+
+<h2>4. Send it to a friend</h2>
+<p>That's it. Copy <code>myapp-bin</code> to any Linux x86_64 machine. No Python install required on your machine for packing — only for running (because your app uses Python). If you want bindboss to check Python automatically on first run, add a <code>--needs</code> flag:</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>bindboss pack ./myapp myapp-bin \
+    --run="python3 main.py" \
+    --needs="python3,python3 --version,https://python.org/downloads/"</pre>
+</div>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Three steps. <code>mkdir</code>, <code>pack</code>, <code>run</code>. If grug get lost, grug come back here. This is the whole thing. Everything else is extra power grug can ignore until grug needs it.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     HOW IT WORKS
+     ============================================================ -->
+<section class="section" id="how-it-works">
+<h1>How it works</h1>
+
+<p>Understanding the internals helps you understand why certain things work the way they do — especially around file paths in your run command and how deps are checked.</p>
+
+<h2>The packing pipeline</h2>
+<p>When you run <code>bindboss pack</code>, three things happen:</p>
+
+<ol>
+  <li><strong>Stub compilation</strong> — bindboss compiles a tiny Go binary called the "stub" using <code>go build -tags stub</code>. This stub is statically linked (no libc). It contains all the extraction and execution logic.</li>
+  <li><strong>Staging</strong> — your source directory is copied to a temp dir, and <code>bindboss.toml</code> (your config, merged with CLI flags) is written into it.</li>
+  <li><strong>Payload append</strong> — the staged directory is compressed as <code>tar.gz</code> and appended to the stub binary. A 121-byte v2 trailer is written after it containing the tar offset, SHA-256 hash, Ed25519 signature slot, and magic bytes.</li>
+</ol>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic — v2 Trailer Layout</div>
+  <div class="box-body">
+    The payload trailer is exactly 121 bytes appended to the end of the binary:<br><br>
+    <code>[8 bytes  big-endian uint64  tar_offset  ]</code><br>
+    <code>[32 bytes SHA-256 of raw tar.gz bytes    ]</code><br>
+    <code>[64 bytes Ed25519 signature OR zeros     ]</code><br>
+    <code>[1 byte   flags: bit0=hash_present, bit1=sig_present]</code><br>
+    <code>[16 bytes magic: "BINDBOSS_PAYLOAD\x02"  ]</code><br><br>
+    The stub locates the trailer by reading the last 16 bytes to find the magic, then seeks backward to read the full trailer. This append-only structure means the stub ELF/PE/Mach-O header is never modified — only data is appended — preserving binary validity.
+  </div>
+</div>
+
+<h2>What the stub does at runtime</h2>
+<p>When you run a packed binary, the stub executes in this order:</p>
+
+<ol>
+  <li>Find itself on disk (resolves symlinks)</li>
+  <li>Locate the payload trailer and open the tar.gz reader</li>
+  <li>If <code>BINDBOSS_VERIFY=1</code>, re-read and verify SHA-256 before proceeding</li>
+  <li>Determine the extract directory (temp or persist)</li>
+  <li>Extract the <code>tar.gz</code> payload into that directory (skipped if persist dir already has content)</li>
+  <li>Load <code>bindboss.toml</code> from the extracted directory</li>
+  <li>On first run: run the install wizard (if configured) or check deps the old way</li>
+  <li>Write dep-checked state so step 7 is skipped on subsequent runs</li>
+  <li>Set extra environment variables from config</li>
+  <li>Run pre_run hooks</li>
+  <li><code>execve(2)</code> the run command — <strong>the stub process is replaced entirely</strong></li>
+  <li>(Fork mode only) run post_run hooks, then cleanup</li>
+</ol>
+
+<h2>File paths in your run command</h2>
+<p>The stub <code>chdir</code>s into the extracted directory before running your command. So your <code>run</code> command's relative paths are relative to <strong>the root of your packed directory</strong>.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 1</span>
+    <span class="example-title">Understanding path resolution</span>
+  </div>
+  <pre>myapp/
+├── bindboss.toml     ← run = "python3 src/main.py"
+├── src/
+│   └── main.py       ← this is what gets run
+└── data/
+    └── config.json   ← accessible as "data/config.json" in main.py</pre>
+</div>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Grug directory is the world. Everything in directory becomes accessible from root. If grug app say <code>open("data/config.json")</code>, grug app finds it. Grug not need absolute path. Grug not need install step. Grug just run.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     BINDBOSS.TOML
+     ============================================================ -->
+<section class="section" id="bindboss-toml">
+<h1>bindboss.toml</h1>
+
+<p>If you put a <code>bindboss.toml</code> file inside your directory before packing, bindboss reads it and uses it as the config. CLI flags override anything in the file. You can also use only CLI flags — the TOML file is optional.</p>
+
+<p>The TOML is injected into the packed binary at pack time. The stub always reads it from the extracted directory at runtime. You never need to ship the TOML separately.</p>
+
+<h2>Full annotated example</h2>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span><span class="fname">bindboss.toml</span></div>
+  <pre><span class="c"># Display name — used in logs, state file path, and wizard header</span>
+<span class="n">name</span> = <span class="s">"myapp"</span>
+
+<span class="c"># Command to run inside the extracted directory</span>
+<span class="c"># Relative paths are relative to the packed directory root</span>
+<span class="n">run</span> = <span class="s">"python3 src/main.py"</span>
+
+<span class="c"># "exec" (default) or "fork"</span>
+<span class="c"># exec = syscall.Exec, replaces process, no post_run, clean PID</span>
+<span class="c"># fork = subprocess, stub stays alive, post_run hooks work</span>
+<span class="n">exec_mode</span> = <span class="s">"exec"</span>
+
+<span class="c"># Extra environment variables injected before running</span>
+<span class="n">env</span> = [<span class="s">"APP_ENV=production"</span>, <span class="s">"LOG_LEVEL=info"</span>]
+
+<span class="c"># Runtime dependencies checked on first run</span>
+<span class="c"># Without the install wizard, missing deps open a browser to the URL</span>
+[[<span class="n">needs</span>]]
+<span class="n">name</span>    = <span class="s">"python3"</span>
+<span class="n">check</span>   = <span class="s">"python3 --version"</span>
+<span class="n">url</span>     = <span class="s">"https://python.org/downloads/"</span>
+<span class="n">message</span> = <span class="s">"Python 3.8+ required. Download from python.org."</span>
+
+<span class="c"># Hooks: commands run before/after the main run command</span>
+<span class="c"># Each string is argv — no shell expansion, no $VAR substitution</span>
+<span class="c"># Use ["sh", "-c", "your shell cmd here"] for shell features</span>
+[<span class="n">hooks</span>]
+<span class="n">pre_run</span>  = [<span class="s">"python3 -m pip install -r requirements.txt -q"</span>]
+<span class="n">post_run</span> = []  <span class="c"># only fires in exec_mode = "fork"</span>
+
+<span class="c"># Extraction settings</span>
+[<span class="n">extract</span>]
+<span class="n">persist</span> = <span class="k">true</span>   <span class="c"># reuse fixed dir (~/.bindboss/myapp/) across runs</span>
+<span class="n">cleanup</span> = <span class="k">false</span>  <span class="c"># don't delete on exit (ignored when persist=true)</span>
+
+<span class="c"># Install wizard (optional — replaces the basic dep check on first run)</span>
+[<span class="n">install</span>]
+<span class="n">enabled</span>      = <span class="k">true</span>
+<span class="n">install_file</span> = <span class="s">"install.json"</span>   <span class="c"># path relative to packed dir root</span></pre>
+</div>
+
+<h2>Configuration precedence</h2>
+<p>bindboss uses a two-layer merge: <strong>TOML values are defaults, CLI flags override them</strong>. The merged config is written back into the packed binary — so the stub always sees a single authoritative <code>bindboss.toml</code>.</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre><span class="c"># toml says run="python3 main.py", but --run flag overrides it</span>
+bindboss pack ./myapp myapp-bin --run="python3 main_v2.py"
+
+<span class="c"># --persist flag overrides extract.persist in TOML</span>
+bindboss pack ./myapp myapp-bin --persist</pre>
+</div>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic</div>
+  <div class="box-body">The merge strategy is implemented in <code>config.MergeFlags()</code>. Empty string from CLI means "not provided" and preserves the TOML value. This is deliberate: it prevents a flag's zero value from silently clobbering a TOML setting. The merged config is serialized back to TOML via <code>config.ToTOML()</code> using <code>BurntSushi/toml</code> and embedded in the staged directory before archiving.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     PAYLOAD FORMAT
+     ============================================================ -->
+<section class="section" id="payload-format">
+<h1>Payload format</h1>
+<p>Packed binaries use the v2 format. Older binaries from before v0.2.0 use v1 (24-byte trailer, no hash, no sig). The stub transparently reads both.</p>
+
+<table>
+  <thead><tr><th>Format</th><th>Trailer size</th><th>Hash</th><th>Signature</th></tr></thead>
+  <tbody>
+    <tr><td>v1 (legacy)</td><td>24 bytes</td><td>No</td><td>No</td></tr>
+    <tr><td>v2 (current)</td><td>121 bytes</td><td>SHA-256</td><td>Ed25519 (optional)</td></tr>
+  </tbody>
+</table>
+
+<p>To check which format a binary uses:</p>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>bindboss inspect ./myapp   <span class="c"># shows "format: v1" or "format: v2"</span></pre>
+</div>
+<p>To upgrade a v1 binary to v2 (get hash verification), simply repack it with the new bindboss.</p>
+</section>
+
+<!-- ============================================================
+     COMMANDS
+     ============================================================ -->
+<section class="section" id="cmd-pack">
+<h1>Command: pack</h1>
+
+<div class="fn-sig">
+  <span class="fname2">bindboss pack</span> <span class="arg"><directory></span> <span class="arg"><output></span> <span class="arg">[flags]</span>
+</div>
+
+<p>Packs a directory into a self-extracting binary. This is the command you'll use 95% of the time.</p>
+
+<h2>Flags</h2>
+<table>
+  <thead><tr><th>Flag</th><th>Required</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>--run="cmd"</td><td><span class="badge badge-req">required*</span></td><td>Command to run inside the extracted dir. Required unless <code>bindboss.toml</code> already has a <code>run</code> field.</td></tr>
+    <tr><td>--needs="name,check,url"</td><td><span class="badge badge-opt">optional</span></td><td>Dep to check on first run. Repeatable. Format: <code>"name,checkCmd,url"</code> or <code>"name,checkCmd,url,message"</code></td></tr>
+    <tr><td>--persist</td><td><span class="badge badge-opt">optional</span></td><td>Extract to fixed dir (<code>~/.bindboss/<name>/</code>) and reuse across runs. Faster for big runtimes.</td></tr>
+    <tr><td>--dir="path"</td><td><span class="badge badge-opt">optional</span></td><td>Override the extract root directory.</td></tr>
+    <tr><td>--target="GOOS/GOARCH"</td><td><span class="badge badge-opt">optional</span></td><td>Cross-compile for another platform: <code>linux/amd64</code>, <code>darwin/arm64</code>, <code>windows/amd64</code>, etc.</td></tr>
+    <tr><td>--sign="path/to/key"</td><td><span class="badge badge-opt">optional</span></td><td>Sign the payload with an Ed25519 private key (generated with <code>bindboss keygen</code>).</td></tr>
+  </tbody>
+</table>
+
+<h2>Important: what gets packed</h2>
+<p>bindboss packs <strong>everything</strong> in the source directory, including hidden files and subdirectories. It does NOT automatically exclude <code>.git/</code>, <code>node_modules/</code>, build artifacts, etc. If you don't want something in the binary, don't have it in the source directory when you pack.</p>
+
+<div class="tip-box">
+  <div class="box-label">✓ Best practice</div>
+  <div class="box-body">Use a clean staging directory for packing. Copy only what you need into a temp dir, then pack that. This keeps binary size down and avoids leaking <code>.git/</code> history or dev credentials into your shipped binary.<br><br>
+  <code>mkdir -p /tmp/myapp-stage && rsync -a --exclude='.git' --exclude='*.pyc' ./myapp/ /tmp/myapp-stage/</code><br>
+  <code>bindboss pack /tmp/myapp-stage myapp-bin --run="python3 main.py"</code>
+  </div>
+</div>
+
+<h2>Examples</h2>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 2</span>
+    <span class="example-title">Pack a Python app with dep check</span>
+  </div>
+  <pre>bindboss pack ./myapp myapp-bin \
+    --run="python3 main.py" \
+    --needs="python3,python3 --version,https://python.org/downloads/"</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 3</span>
+    <span class="example-title">Pack a Julia app with persist and multiple deps</span>
+  </div>
+  <pre>bindboss pack ./grugbot grugbot \
+    --run="julia src/Main.jl" \
+    --needs="julia,julia --version,https://julialang.org/downloads/" \
+    --persist</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 4</span>
+    <span class="example-title">Cross-compile for macOS Apple Silicon</span>
+  </div>
+  <pre>bindboss pack ./myapp myapp-darwin-arm64 \
+    --run="python3 main.py" \
+    --target=darwin/arm64</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 5</span>
+    <span class="example-title">Pack with config entirely in bindboss.toml (no CLI flags needed)</span>
+  </div>
+  <pre><span class="c"># myapp/bindboss.toml already has name, run, needs, hooks, etc.</span>
+bindboss pack ./myapp myapp-bin</pre>
+</div>
+</section>
+
+<!-- ============================================================
+     CMD: INSPECT
+     ============================================================ -->
+<section class="section" id="cmd-inspect">
+<h1>Command: inspect</h1>
+
+<div class="fn-sig">
+  <span class="fname2">bindboss inspect</span> <span class="arg"><binary></span> <span class="arg">[--list]</span>
+</div>
+
+<p>Reads and prints the embedded config from a packed binary without running it. Useful for debugging, auditing, or confirming what ended up in a binary.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 6</span>
+    <span class="example-title">Inspect a packed binary</span>
+  </div>
+  <pre>bindboss inspect ./grugbot420</pre>
+  <div class="example-output">
+    <div class="example-output-label">Output</div>
+    <pre>binary:    ./grugbot420
+name:      grugbot420
+run:       julia src/Main.jl
+exec_mode: exec
+format:    v2
+hash:      83aee33c72acca921e887fcdc6899e346d383610a4a993ac99b3be3abd6db2e2
+signed:    no
+deps:
+  - julia
+    check:   julia --version
+    url:     https://julialang.org/downloads/
+    message: GrugBot needs Julia 1.9+...
+persist:   true</pre>
+  </div>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 7</span>
+    <span class="example-title">List all files packed inside</span>
+  </div>
+  <pre>bindboss inspect ./grugbot420 --list</pre>
+  <div class="example-output">
+    <div class="example-output-label">Output (truncated)</div>
+    <pre>...
+files:
+  LICENSE (1080 bytes)
+  bindboss.toml (459 bytes)
+  src/
+  src/Main.jl (152419 bytes)
+  src/install.json (3010 bytes)
+  src/engine.jl (98135 bytes)
+  ...</pre>
+  </div>
+</div>
+</section>
+
+<!-- ============================================================
+     CMD: VERIFY
+     ============================================================ -->
+<section class="section" id="cmd-verify">
+<h1>Command: verify</h1>
+
+<div class="fn-sig">
+  <span class="fname2">bindboss verify</span> <span class="arg"><binary></span> <span class="arg">[--pubkey=path]</span>
+</div>
+
+<p>Verifies the SHA-256 hash of the payload (always) and optionally the Ed25519 signature. Returns exit code 0 on success, 1 on failure.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 8</span>
+    <span class="example-title">Verify integrity (hash only)</span>
+  </div>
+  <pre>bindboss verify ./grugbot420</pre>
+  <div class="example-output">
+    <div class="example-output-label">Output</div>
+    <pre>[bindboss] ✓ hash verified: 83aee33c...abd6db2e2</pre>
+  </div>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 9</span>
+    <span class="example-title">Verify with signature check</span>
+  </div>
+  <pre>bindboss verify ./grugbot420 --pubkey=~/.bindboss/keys/myproject.pub</pre>
+  <div class="example-output">
+    <div class="example-output-label">Success</div>
+    <pre>[bindboss] ✓ hash verified: 83aee33c...
+[bindboss] ✓ signature verified (Ed25519)</pre>
+  </div>
+</div>
+
+<p>You can also trigger hash verification at runtime by setting an env var before running the binary:</p>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>BINDBOSS_VERIFY=1 ./grugbot420</pre>
+</div>
+<p>This forces the stub to re-read and verify the payload hash before extracting. It's off by default because it requires a full extra read of the payload (slower for large binaries).</p>
+</section>
+
+<!-- ============================================================
+     CMD: KEYGEN
+     ============================================================ -->
+<section class="section" id="cmd-keygen">
+<h1>Command: keygen</h1>
+
+<div class="fn-sig">
+  <span class="fname2">bindboss keygen</span> <span class="arg"><name></span> <span class="arg">[--keydir=path]</span>
+</div>
+
+<p>Generates an Ed25519 keypair for signing packed binaries. Creates two files: <code><name>.key</code> (private, mode 0600) and <code><name>.pub</code> (public). Keys are stored in <code>~/.bindboss/keys/</code> by default.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 10</span>
+    <span class="example-title">Generate a keypair</span>
+  </div>
+  <pre>bindboss keygen myproject</pre>
+  <div class="example-output">
+    <div class="example-output-label">Output</div>
+    <pre>[bindboss] ✓ keypair generated: myproject
+[bindboss]   private: /home/user/.bindboss/keys/myproject.key (0600)
+[bindboss]   public:  /home/user/.bindboss/keys/myproject.pub</pre>
+  </div>
+</div>
+
+<div class="warn-box">
+  <div class="box-label">⚠ Warning</div>
+  <div class="box-body">Keep your <code>.key</code> file private. Anyone with your private key can sign binaries that verify against your public key. The <code>.pub</code> file is safe to share — distribute it alongside your binary so users can verify authenticity.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     CMD: RESET
+     ============================================================ -->
+<section class="section" id="cmd-reset">
+<h1>Command: reset</h1>
+
+<div class="fn-sig">
+  <span class="fname2">bindboss reset</span> <span class="arg"><name></span>
+</div>
+
+<p>Deletes the first-run state for a binary. This causes the dep check or install wizard to run again on next launch. Useful for re-testing your installer or when a user reports a missing dep issue.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 11</span>
+    <span class="example-title">Re-trigger the install wizard</span>
+  </div>
+  <pre>bindboss reset grugbot420
+./grugbot420    <span class="c"># install wizard runs again</span></pre>
+</div>
+
+<p>The state file is stored at <code>~/.bindboss/state/<name>.json</code>. Deleting that file manually has the same effect as <code>bindboss reset</code>.</p>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — OVERVIEW
+     ============================================================ -->
+<section class="section" id="wizard-overview">
+<h1>Install Wizard — Overview</h1>
+
+<p>The install wizard is a JSON-driven terminal GUI that runs on first launch instead of the basic dep check. It provides a guided, multi-step setup experience — like a proper installer, but in the terminal, with no ncurses and no third-party dependencies.</p>
+
+<div class="step-flow-wrap">
+  <span class="sp active">welcome</span>
+  <span class="step-arrow">→</span>
+  <span class="sp active">license</span>
+  <span class="step-arrow">→</span>
+  <span class="sp active">deps</span>
+  <span class="step-arrow">→</span>
+  <span class="sp active">message</span>
+  <span class="step-arrow">→</span>
+  <span class="sp active">finish</span>
+</div>
+
+<p>You define the wizard entirely in JSON. The stub reads it on first run and executes each step in order. Steps can be skipped back to with the "back" command. The wizard only runs once — after it completes, state is written so subsequent runs go straight to your app.</p>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Grug make JSON file. JSON file say what wizard do. Wizard run on first launch. User see nice terminal boxes. User press Enter. User get through wizard. App run. Grug not write any Go code for this. Grug just write JSON. Very good.</div>
+</div>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic</div>
+  <div class="box-body">The wizard follows a <em>discriminated union</em> pattern in its JSON schema — each step object has a <code>"type"</code> field that acts as a type discriminator. The parser rejects unknown types at startup (fail-fast), preventing mid-install failures. The execution model is a simple finite state machine: a <code>currentStep</code> index advances forward on Enter and backward on "back". All terminal rendering uses Unicode box-drawing characters (U+2550 et al.) with no ANSI cursor movement — output is strictly append-only, making it pipeable and debuggable.</div>
+</div>
+
+<h2>How to enable the wizard</h2>
+<p>Three steps:</p>
+<ol>
+  <li>Create an <code>install.json</code> file inside your app directory</li>
+  <li>Add the <code>[install]</code> section to your <code>bindboss.toml</code></li>
+  <li>Pack as usual</li>
+</ol>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span><span class="fname">bindboss.toml</span></div>
+  <pre>[<span class="n">install</span>]
+<span class="n">enabled</span>      = <span class="k">true</span>
+<span class="n">install_file</span> = <span class="s">"install.json"</span>  <span class="c"># relative to packed dir root</span></pre>
+</div>
+
+<p>If <code>enabled = false</code> or the <code>[install]</code> section is absent entirely, bindboss falls back to the original behavior: check deps → open browser if missing → wait for Enter → re-check. Existing binaries are completely unaffected.</p>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — JSON SCHEMA
+     ============================================================ -->
+<section class="section" id="wizard-json">
+<h1>Install Wizard — install.json Schema</h1>
+
+<p>The install.json file has a simple top-level structure with a list of steps.</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span><span class="fname">install.json</span></div>
+  <pre>{
+  <span class="s">"title"</span>:   <span class="s">"My App"</span>,         <span class="c">// shown in every step's header bar</span>
+  <span class="s">"version"</span>: <span class="s">"1.0.0"</span>,         <span class="c">// shown next to title</span>
+  <span class="s">"steps"</span>: [
+    <span class="c">// ... step objects (see Step Types section)</span>
+  ]
+}</pre>
+</div>
+
+<h2>Minimal working example</h2>
+<p>The absolute minimum wizard — just welcome and finish:</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 12</span>
+    <span class="example-title">Minimal install.json</span>
+  </div>
+  <pre>{
+  "title": "My App",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "type": "welcome",
+      "title": "Welcome",
+      "content": "Welcome to My App!\n\nPress Enter to start."
+    },
+    {
+      "type": "finish",
+      "title": "Ready",
+      "content": "✓ All done! The app will start now."
+    }
+  ]
+}</pre>
+</div>
+
+<h2>Full example (all step types)</h2>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 13</span>
+    <span class="example-title">Complete install.json with all step types</span>
+  </div>
+  <pre>{
+  "title": "GrugBot420",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "type": "welcome",
+      "title": "Welcome to GrugBot420",
+      "content": "Welcome!\n\nThis wizard will check for required deps.\nYou'll need:\n  • Julia 1.9+\n  • ~500MB free disk space\n\nPress Enter to get started, or Ctrl+C to abort."
+    },
+    {
+      "type": "license",
+      "title": "License Agreement",
+      "content": "MIT License\n\nCopyright (c) 2024 ...\n\nPermission is hereby granted..."
+    },
+    {
+      "type": "deps",
+      "title": "Dependencies",
+      "deps": [
+        {
+          "name": "Julia 1.9+",
+          "check": "julia --version",
+          "download_url": "https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.2-linux-x86_64.tar.gz",
+          "file_name": "julia-installer.tar.gz",
+          "fallback_url": "https://julialang.org/downloads/",
+          "message": "Julia is the language runtime GrugBot needs."
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "title": "Configuration",
+      "content": "Deps are installed!\n\nDefault settings:\n  • Mode: interactive CLI\n  • Arousal: 0.5 (neutral)\n\nThese can be changed later via /config."
+    },
+    {
+      "type": "finish",
+      "title": "Setup Complete",
+      "content": "  ✓ GrugBot420 is ready to run!\n\n  The app will start automatically now.\n  Happy grugging! 🦕"
+    }
+  ]
+}</pre>
+</div>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — STEP TYPES
+     ============================================================ -->
+<section class="section" id="wizard-steps">
+<h1>Install Wizard — Step Types</h1>
+
+<table>
+  <thead><tr><th>Type</th><th>Description</th><th>User action</th></tr></thead>
+  <tbody>
+    <tr><td>welcome</td><td>Display a greeting or intro message</td><td>Press Enter to continue</td></tr>
+    <tr><td>license</td><td>Display license text. User must accept to proceed.</td><td>Type "accept" + Enter</td></tr>
+    <tr><td>deps</td><td>Check dependencies, download and install missing ones</td><td>Wizard handles it; Enter to confirm each step</td></tr>
+    <tr><td>message</td><td>Show informational text (config summary, notes, etc.)</td><td>Press Enter to continue</td></tr>
+    <tr><td>finish</td><td>Show completion message, exit wizard</td><td>Press Enter (then app starts)</td></tr>
+  </tbody>
+</table>
+
+<h3>welcome</h3>
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span></div>
+  <pre>{
+  <span class="s">"type"</span>:    <span class="s">"welcome"</span>,
+  <span class="s">"title"</span>:   <span class="s">"Welcome to My App"</span>,
+  <span class="s">"content"</span>: <span class="s">"Multi-line\nwelcome message here.\n\nPress Enter to continue."</span>
+}</pre>
+</div>
+
+<h3>license</h3>
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span></div>
+  <pre>{
+  <span class="s">"type"</span>:    <span class="s">"license"</span>,
+  <span class="s">"title"</span>:   <span class="s">"License Agreement"</span>,
+  <span class="s">"content"</span>: <span class="s">"MIT License\n\nCopyright (c) 2024..."</span>
+}</pre>
+</div>
+<p>The user must type <code>accept</code> (case-insensitive) and press Enter. Any other input reprompts. Ctrl+C aborts.</p>
+
+<h3>deps</h3>
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span></div>
+  <pre>{
+  <span class="s">"type"</span>:  <span class="s">"deps"</span>,
+  <span class="s">"title"</span>: <span class="s">"Dependencies"</span>,
+  <span class="s">"deps"</span>:  [ <span class="c">/* dep objects — see Dep Definitions section */</span> ]
+}</pre>
+</div>
+
+<h3>message</h3>
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span></div>
+  <pre>{
+  <span class="s">"type"</span>:    <span class="s">"message"</span>,
+  <span class="s">"title"</span>:   <span class="s">"Configuration"</span>,
+  <span class="s">"content"</span>: <span class="s">"Here is some information.\n\nDefault settings:\n  • foo = bar"</span>
+}</pre>
+</div>
+
+<h3>finish</h3>
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span></div>
+  <pre>{
+  <span class="s">"type"</span>:    <span class="s">"finish"</span>,
+  <span class="s">"title"</span>:   <span class="s">"All Done"</span>,
+  <span class="s">"content"</span>: <span class="s">"✓ Setup complete!\n\nThe app will start automatically."</span>
+}</pre>
+</div>
+<p>After the finish step, the wizard exits and the stub proceeds to run your app normally.</p>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — DEP DEFINITIONS
+     ============================================================ -->
+<section class="section" id="wizard-deps">
+<h1>Install Wizard — Dep Definitions</h1>
+
+<p>Dep definitions live inside a <code>deps</code> step. Each object defines one dependency the wizard will check and potentially download.</p>
+
+<table>
+  <thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>name</td><td><span class="badge badge-req">required</span></td><td>Human-readable name shown in the UI, e.g. "Julia 1.9+"</td></tr>
+    <tr><td>check</td><td><span class="badge badge-req">required</span></td><td>Shell command to test presence. Exit 0 = installed, non-zero = missing.</td></tr>
+    <tr><td>download_url</td><td><span class="badge badge-req">required*</span></td><td>Direct HTTP(S) download link for the installer file.</td></tr>
+    <tr><td>fallback_url</td><td><span class="badge badge-req">required*</span></td><td>Browser URL shown if direct download fails or isn't available.</td></tr>
+    <tr><td>file_name</td><td><span class="badge badge-opt">optional</span></td><td>Override filename for the downloaded installer. Defaults to the URL's basename.</td></tr>
+    <tr><td>hash</td><td><span class="badge badge-opt">optional</span></td><td>Expected SHA-256 hex digest of the downloaded file. If provided, download is rejected if hash doesn't match.</td></tr>
+    <tr><td>message</td><td><span class="badge badge-opt">optional</span></td><td>Extra context shown to the user above the download prompt.</td></tr>
+  </tbody>
+</table>
+
+<p>* At least one of <code>download_url</code> or <code>fallback_url</code> must be provided.</p>
+
+<h2>Download flow per dep</h2>
+<p>For each dep in a <code>deps</code> step, the wizard does this:</p>
+<ol>
+  <li>Run the <code>check</code> command. If exit 0 → dep is present, show ✓ and move on.</li>
+  <li>If missing: show the dep name, message, and download prompt.</li>
+  <li>HTTP GET the <code>download_url</code> with a progress bar.</li>
+  <li>If <code>hash</code> is set: verify SHA-256 of downloaded file. Abort if mismatch.</li>
+  <li>Launch the downloaded installer (platform-aware: <code>.sh</code>, <code>.exe</code>, <code>.msi</code>, <code>.dmg</code>, etc.).</li>
+  <li>Prompt user to press Enter when installation is complete.</li>
+  <li>Run <code>check</code> again. If still missing: offer retry. If present: show ✓.</li>
+</ol>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Wizard check if julia exist. Julia not exist? Wizard download julia. Wizard run julia installer. Wizard wait for grug to press Enter. Wizard check again. Julia exist now. Wizard happy. Grug happy. This is the whole thing. No browser. No googling. Just Enter.</div>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 14</span>
+    <span class="example-title">Dep with hash verification</span>
+  </div>
+  <pre>{
+  "name": "Julia 1.9+",
+  "check": "julia --version",
+  "download_url": "https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.2-linux-x86_64.tar.gz",
+  "file_name": "julia-1.10.2-linux-x86_64.tar.gz",
+  "hash": "a60d59cb14bf3ba5d34e7b28b2b13abd6b6b5daaf0ea40234baeda0a5c18e3e7",
+  "fallback_url": "https://julialang.org/downloads/",
+  "message": "Julia is the language runtime. Version 1.9 or later required."
+}</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 15</span>
+    <span class="example-title">Multiple deps in one step</span>
+  </div>
+  <pre>{
+  "type": "deps",
+  "title": "Dependencies",
+  "deps": [
+    {
+      "name": "Python 3.8+",
+      "check": "python3 --version",
+      "download_url": "https://www.python.org/ftp/python/3.11.8/python-3.11.8-amd64.exe",
+      "fallback_url": "https://python.org/downloads/",
+      "message": "Python is required to run the app."
+    },
+    {
+      "name": "ffmpeg",
+      "check": "ffmpeg -version",
+      "download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
+      "fallback_url": "https://ffmpeg.org/download.html",
+      "message": "ffmpeg handles video/audio processing."
+    }
+  ]
+}</pre>
+</div>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — NAVIGATION
+     ============================================================ -->
+<section class="section" id="wizard-nav">
+<h1>Install Wizard — Navigation</h1>
+
+<table>
+  <thead><tr><th>Input</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>Enter</td><td>Proceed to next step</td></tr>
+    <tr><td>back + Enter</td><td>Go back one step (where applicable)</td></tr>
+    <tr><td>retry + Enter</td><td>Re-download a failed dependency</td></tr>
+    <tr><td>accept + Enter</td><td>Accept the license agreement (license step only)</td></tr>
+    <tr><td>Ctrl+C</td><td>Abort wizard entirely — exits with FATAL error, no state written</td></tr>
+  </tbody>
+</table>
+
+<p>Navigation is case-insensitive. Pressing Enter on a non-license step always advances forward. Going back on the first step does nothing.</p>
+
+<div class="tip-box">
+  <div class="box-label">✓ Tip</div>
+  <div class="box-body">If a user aborts with Ctrl+C, no state is written — the wizard will re-run on the next launch. This is intentional: a crashed or incomplete install should not be silently skipped next time.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     INSTALL WIZARD — INLINE VS FILE
+     ============================================================ -->
+<section class="section" id="wizard-inline">
+<h1>Install Wizard — Inline vs File Config</h1>
+
+<p>You have two ways to provide the wizard JSON to bindboss:</p>
+
+<h2>Option 1: Reference a JSON file in your packed directory (recommended)</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span><span class="fname">bindboss.toml</span></div>
+  <pre>[<span class="n">install</span>]
+<span class="n">enabled</span>      = <span class="k">true</span>
+<span class="n">install_file</span> = <span class="s">"install.json"</span>   <span class="c"># path relative to packed dir root</span></pre>
+</div>
+<p>The <code>install.json</code> file must exist inside the directory you're packing. The path is relative to the <strong>root of the packed directory</strong>. So if your app lives at <code>myapp/src/</code> and you pack <code>myapp/</code>, use <code>"src/install.json"</code>.</p>
+
+<h2>Option 2: Inline the JSON directly in TOML</h2>
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span><span class="fname">bindboss.toml</span></div>
+  <pre>[<span class="n">install</span>]
+<span class="n">enabled</span>        = <span class="k">true</span>
+<span class="n">install_config</span> = <span class="s">'{"title":"My App","version":"1.0.0","steps":[{"type":"welcome","title":"Hi","content":"Hello!"},{"type":"finish","title":"Done","content":"Starting..."}]}'</span></pre>
+</div>
+<p>Useful for simple configs or when you don't want a separate file. For anything with more than two steps, the file approach is much easier to read and edit.</p>
+
+<div class="warn-box">
+  <div class="box-label">⚠ Precedence</div>
+  <div class="box-body">If both <code>install_config</code> and <code>install_file</code> are set, <strong><code>install_config</code> (inline) wins</strong>. The file is ignored.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     REAL-WORLD EXAMPLES
+     ============================================================ -->
+<section class="section" id="ex-python">
+<h1>Real-World Example: Python App</h1>
+
+<p>A data analysis script that needs Python 3.8+, pandas, and matplotlib. No install wizard — just CLI flags for simplicity.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 16</span>
+    <span class="example-title">Directory structure</span>
+  </div>
+  <pre>myanalysis/
+├── bindboss.toml
+├── main.py
+├── requirements.txt
+└── data/
+    └── sample.csv</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 17</span>
+    <span class="example-title">bindboss.toml for Python app with pip install hook</span>
+  </div>
+  <pre>name = "myanalysis"
+run  = "python3 main.py"
+
+[[needs]]
+name    = "python3"
+check   = "python3 --version"
+url     = "https://python.org/downloads/"
+message = "Python 3.8+ required."
+
+[hooks]
+pre_run = ["python3 -m pip install -r requirements.txt -q"]
+
+[extract]
+persist = true</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 18</span>
+    <span class="example-title">Pack command</span>
+  </div>
+  <pre><span class="c"># Use a staging dir to exclude dev artifacts</span>
+rsync -a --exclude='__pycache__' --exclude='*.pyc' ./myanalysis/ /tmp/myanalysis-stage/
+bindboss pack /tmp/myanalysis-stage myanalysis-bin</pre>
+</div>
+
+<p>On first run, the binary checks for Python 3. If found, it runs <code>pip install -r requirements.txt -q</code> silently, then launches <code>main.py</code>. Every subsequent run skips the dep check and runs pip install again (via pre_run hook) before launching. If you want to skip the pip install on subsequent runs too, move it into an install wizard <code>message</code> step or handle it in your Python code.</p>
+</section>
+
+<section class="section" id="ex-julia">
+<h1>Real-World Example: Julia App (GrugBot)</h1>
+
+<p>This is the actual setup used for grugbot420 — a large Julia neuromorphic AI with a full install wizard.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 19</span>
+    <span class="example-title">Directory structure</span>
+  </div>
+  <pre>grugbot420/
+├── bindboss.toml
+├── LICENSE
+└── src/
+    ├── Main.jl
+    ├── engine.jl
+    ├── BrainStem.jl
+    ├── install.json    ← wizard config lives alongside source
+    └── ... (more .jl files)</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 20</span>
+    <span class="example-title">bindboss.toml</span>
+  </div>
+  <pre>name = "grugbot420"
+run  = "julia src/Main.jl"
+
+[[needs]]
+name    = "julia"
+check   = "julia --version"
+url     = "https://julialang.org/downloads/"
+message = "GrugBot needs Julia 1.9+. Download from julialang.org."
+
+[hooks]
+pre_run  = []
+post_run = []
+
+[extract]
+persist = true
+
+[install]
+enabled      = true
+install_file = "src/install.json"</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 21</span>
+    <span class="example-title">Pack command (using clean staging dir to exclude .git)</span>
+  </div>
+  <pre>rsync -av --exclude='.git' --exclude='grug-binary' --exclude='todo.md' \
+    --exclude='*.gz' --exclude='test/' \
+    ./grugbot420/ /tmp/grugbot-stage/
+
+cd /path/to/bindboss-source
+./bindboss pack /tmp/grugbot-stage ../grugbot420/grug-binary/grugbot420</pre>
+</div>
+
+<div class="tip-box">
+  <div class="box-label">✓ Note on install_file path</div>
+  <div class="box-body">The <code>run</code> command is <code>julia src/Main.jl</code> — meaning the stub runs from the packed dir root, and <code>src/</code> is a subdirectory. The <code>install_file</code> path is also relative to that root, so <code>"src/install.json"</code> correctly points to the same location.</div>
+</div>
+</section>
+
+<section class="section" id="ex-bun">
+<h1>Real-World Example: Bun / Node App</h1>
+
+<p>A web server written in TypeScript using Bun. Pack it so anyone can run it without installing Bun manually.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 22</span>
+    <span class="example-title">bindboss.toml for a Bun app</span>
+  </div>
+  <pre>name = "myserver"
+run  = "bun run index.ts"
+
+[[needs]]
+name    = "bun"
+check   = "bun --version"
+url     = "https://bun.sh"
+message = "Bun is a fast JavaScript runtime. Install from bun.sh."
+
+[extract]
+persist = true</pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 23</span>
+    <span class="example-title">Pack command</span>
+  </div>
+  <pre>bindboss pack ./myserver myserver-bin \
+    --run="bun run index.ts" \
+    --needs="bun,bun --version,https://bun.sh" \
+    --persist</pre>
+</div>
+
+<p>The packed binary will extract all your TypeScript source files to <code>~/.bindboss/myserver/</code> and run <code>bun run index.ts</code> from there. Bun is checked on first run; if missing, the URL is shown (or you can add a full wizard with a download step).</p>
+</section>
+
+<section class="section" id="ex-shell">
+<h1>Real-World Example: Shell Script Bundle</h1>
+
+<p>A set of shell scripts and config files you want to distribute as a single binary. No runtime dep other than <code>bash</code>.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 24</span>
+    <span class="example-title">Pack a shell script bundle</span>
+  </div>
+  <pre>mybundle/
+├── run.sh         ← entry point
+├── lib/
+│   ├── utils.sh
+│   └── install.sh
+└── config/
+    └── defaults.conf</pre>
+  <div class="example-output">
+    <div class="example-output-label">Pack command</div>
+    <pre>bindboss pack ./mybundle mybundle-bin --run="bash run.sh"</pre>
+  </div>
+</div>
+
+<p>The stub extracts everything, <code>chdir</code>s into the dir, then runs <code>bash run.sh</code>. Your scripts can reference <code>lib/utils.sh</code> and <code>config/defaults.conf</code> with relative paths just as they would locally.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 25</span>
+    <span class="example-title">run.sh referencing sibling files</span>
+  </div>
+  <pre>#!/usr/bin/env bash
+<span class="c"># This runs from the packed dir root — relative paths just work</span>
+source lib/utils.sh
+source config/defaults.conf
+
+main "$@"</pre>
+</div>
+</section>
+
+<section class="section" id="ex-signed">
+<h1>Real-World Example: Signed Release</h1>
+
+<p>For distributing binaries publicly where tampering is a concern. Generate a keypair, sign on pack, verify on receipt.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 26</span>
+    <span class="example-title">Full signing workflow</span>
+  </div>
+  <pre><span class="c"># Step 1: Generate keypair (do this once, keep .key secret)</span>
+bindboss keygen myproject
+<span class="c"># Creates ~/.bindboss/keys/myproject.key and myproject.pub</span>
+
+<span class="c"># Step 2: Pack with signing</span>
+bindboss pack ./myapp myapp-signed \
+    --run="python3 main.py" \
+    --sign=~/.bindboss/keys/myproject.key
+
+<span class="c"># Step 3: Distribute myapp-signed AND myproject.pub</span>
+<span class="c"># Users verify like this:</span>
+bindboss verify ./myapp-signed --pubkey=./myproject.pub</pre>
+  <div class="example-output">
+    <div class="example-output-label">Verification output</div>
+    <pre>[bindboss] ✓ hash verified: a8f3c2...
+[bindboss] ✓ signature verified (Ed25519)</pre>
+  </div>
+</div>
+</section>
+
+<section class="section" id="ex-crosscompile">
+<h1>Real-World Example: Cross-Compilation</h1>
+
+<p>Build a binary on Linux that targets macOS Apple Silicon. No Mac required.</p>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 27</span>
+    <span class="example-title">Build for macOS on Linux</span>
+  </div>
+  <pre>bindboss pack ./myapp myapp-macos \
+    --run="python3 main.py" \
+    --target=darwin/arm64</pre>
+</div>
+
+<p>Supported targets are anything Go's toolchain supports: <code>linux/amd64</code>, <code>linux/arm64</code>, <code>darwin/amd64</code>, <code>darwin/arm64</code>, <code>windows/amd64</code>, etc. The stub is cross-compiled; your payload files are included as-is (they're not compiled by bindboss).</p>
+
+<div class="warn-box">
+  <div class="box-label">⚠ Note</div>
+  <div class="box-body">Cross-compilation builds the <em>stub</em> for the target platform. Your app's runtime (Python, Julia, Bun, etc.) still needs to be present on the target machine — bindboss doesn't magically bundle interpreters. The dep check handles that side of things.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     ADVANCED: HOOKS
+     ============================================================ -->
+<section class="section" id="adv-hooks">
+<h1>Advanced: Pre/Post Hooks</h1>
+
+<p>Hooks are commands that run before or after your main run command. They're defined as an array of strings in <code>bindboss.toml</code>. Each string is parsed as argv — <strong>no shell expansion, no variable substitution</strong>.</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span></div>
+  <pre>[<span class="n">hooks</span>]
+<span class="n">pre_run</span>  = [
+    <span class="s">"python3 -m pip install -r requirements.txt -q"</span>,
+    <span class="s">"python3 scripts/init_db.py"</span>
+]
+<span class="n">post_run</span> = [<span class="s">"python3 scripts/cleanup.py"</span>]  <span class="c"># exec_mode=fork ONLY</span></pre>
+</div>
+
+<div class="warn-box">
+  <div class="box-label">⚠ post_run and exec mode</div>
+  <div class="box-body"><strong>post_run hooks only fire in <code>exec_mode = "fork"</code></strong>. In the default <code>exec</code> mode, <code>syscall.Exec</code> replaces the stub process entirely — there's nothing left to run post_run after your app exits. If you need post_run, set <code>exec_mode = "fork"</code> in your TOML.</div>
+</div>
+
+<h2>Using shell features in hooks</h2>
+<p>Hooks don't go through a shell. If you need pipes, redirects, or variable expansion, wrap in <code>sh -c</code>:</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span></div>
+  <pre>[<span class="n">hooks</span>]
+<span class="n">pre_run</span> = [<span class="s">"sh -c 'echo Starting app > /tmp/myapp.log 2>&1'"</span>]</pre>
+</div>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic</div>
+  <div class="box-body">Hooks use a declarative array-of-strings model. Each string is split on whitespace (with basic quote handling) by <code>hooks.splitCmd()</code> and passed directly to <code>exec.Command()</code> — no shell invocation. This keeps the execution surface small and predictable: no injection vectors from user-controlled data, no PATH-dependent shell behavior. The trade-off is that shell features require explicit <code>sh -c '...'</code> wrapping, which is visible and auditable in the TOML.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     ADVANCED: EXEC VS FORK
+     ============================================================ -->
+<section class="section" id="adv-exec-mode">
+<h1>Advanced: exec vs fork mode</h1>
+
+<p>The <code>exec_mode</code> setting controls how the stub hands off to your app.</p>
+
+<table>
+  <thead><tr><th>Mode</th><th>How</th><th>post_run works?</th><th>PID</th><th>Windows</th></tr></thead>
+  <tbody>
+    <tr><td>exec (default)</td><td><code>syscall.Exec</code> — replaces the stub process image</td><td>No</td><td>Preserved (same PID as stub)</td><td>Not available (forced fork)</td></tr>
+    <tr><td>fork</td><td><code>os/exec.Cmd.Run()</code> — stub stays alive as wrapper</td><td>Yes</td><td>New child PID</td><td>Yes (always used)</td></tr>
+  </tbody>
+</table>
+
+<div class="grug-box">
+  <div class="box-label">🦕 Grug says</div>
+  <div class="box-body">Grug use <code>exec</code> (default). Stub become app. Same process. Clean. No wrapper overhead. If grug need to run cleanup script after app exits, grug use <code>fork</code>. Otherwise, grug leave it alone.</div>
+</div>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span></div>
+  <pre><span class="c"># Use fork mode when you need post_run hooks</span>
+<span class="n">exec_mode</span> = <span class="s">"fork"</span>
+
+[<span class="n">hooks</span>]
+<span class="n">post_run</span> = [<span class="s">"python3 cleanup.py"</span>]</pre>
+</div>
+</section>
+
+<!-- ============================================================
+     ADVANCED: PERSIST
+     ============================================================ -->
+<section class="section" id="adv-persist">
+<h1>Advanced: Persist Extraction</h1>
+
+<p>By default, the stub extracts to a fresh temp directory on every run. With <code>persist = true</code>, it extracts once to <code>~/.bindboss/<name>/</code> and reuses that directory on subsequent runs — extraction is skipped if the directory already has content.</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span></div>
+  <pre>[<span class="n">extract</span>]
+<span class="n">persist</span> = <span class="k">true</span>   <span class="c"># extract once, reuse forever</span></pre>
+</div>
+
+<p>Or via CLI:</p>
+<div class="code-block">
+  <div class="code-header"><span class="lang">shell</span></div>
+  <pre>bindboss pack ./myapp myapp-bin --run="julia main.jl" --persist</pre>
+</div>
+
+<p>Use persist for apps with large runtimes (Julia, Node.js deps, ML models) where extraction every run would be slow. For small scripts, the default tmpdir behavior is fine.</p>
+
+<div class="tip-box">
+  <div class="box-label">✓ Tip</div>
+  <div class="box-body">To reset the persistent extraction (e.g. after updating the binary), just delete <code>~/.bindboss/<name>/</code> or use <code>bindboss reset <name></code> which clears the state file and forces re-extraction on next run.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     ADVANCED: ENV VARS
+     ============================================================ -->
+<section class="section" id="adv-env">
+<h1>Advanced: Environment Variables</h1>
+
+<p>You can inject extra environment variables into your app's environment using the <code>env</code> field in <code>bindboss.toml</code>:</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span></div>
+  <pre><span class="n">env</span> = [
+    <span class="s">"APP_ENV=production"</span>,
+    <span class="s">"LOG_LEVEL=info"</span>,
+    <span class="s">"MAX_CONNECTIONS=100"</span>
+]</pre>
+</div>
+
+<p>These are appended to the process environment (on top of the existing env). If the same key already exists in the process env, the last value wins — so your TOML values take priority over the system environment.</p>
+
+<p>The stub also sets one implicit env var: users can set <code>BINDBOSS_VERIFY=1</code> before running to force hash verification. This is external — you don't configure it in TOML.</p>
+</section>
+
+<!-- ============================================================
+     ADVANCED: SIGNING
+     ============================================================ -->
+<section class="section" id="adv-signing">
+<h1>Advanced: Signing & Verification</h1>
+
+<p>Signing adds an Ed25519 signature over the payload hash. This lets users verify that a binary was produced by you and has not been tampered with since signing.</p>
+
+<h2>Full workflow</h2>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 28</span>
+    <span class="example-title">Producer side (you)</span>
+  </div>
+  <pre><span class="c"># Generate once</span>
+bindboss keygen myproject
+<span class="c"># ~/.bindboss/keys/myproject.key  (KEEP SECRET)</span>
+<span class="c"># ~/.bindboss/keys/myproject.pub  (share this)</span>
+
+<span class="c"># Pack with signing</span>
+bindboss pack ./myapp myapp-v1.2 \
+    --run="python3 main.py" \
+    --sign=~/.bindboss/keys/myproject.key
+
+<span class="c"># Distribute: myapp-v1.2 + myproject.pub</span></pre>
+</div>
+
+<div class="example">
+  <div class="example-header">
+    <span class="example-num">Example 29</span>
+    <span class="example-title">Consumer side (your user)</span>
+  </div>
+  <pre><span class="c"># They run verify before running</span>
+bindboss verify ./myapp-v1.2 --pubkey=./myproject.pub
+<span class="c"># [bindboss] ✓ hash verified</span>
+<span class="c"># [bindboss] ✓ signature verified (Ed25519)</span>
+
+./myapp-v1.2</pre>
+</div>
+
+<div class="academic-box">
+  <div class="box-label">📚 Academic</div>
+  <div class="box-body">The Ed25519 signature is computed over <code>SHA-256(payload)</code> rather than the raw payload bytes. Signing a cryptographic hash is safe when the hash function is collision-resistant: SHA-256 provides 128-bit collision resistance, which is well above the 80-bit threshold required for Ed25519 security. This approach avoids loading the entire (potentially large) payload into memory for signing — only the 32-byte hash is signed. The signature is stored in the 64-byte slot in the v2 trailer; if no signing key was provided at pack time, those 64 bytes are zeros and the <code>sig_present</code> flag bit is 0.</div>
+</div>
+</section>
+
+<!-- ============================================================
+     ADVANCED: GO LIBRARY API
+     ============================================================ -->
+<section class="section" id="adv-library">
+<h1>Advanced: Go Library API</h1>
+
+<p>bindboss exposes a Go library API at <code>pkg/bindboss</code> for embedding packing functionality into your own tools.</p>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">go</span></div>
+  <pre><span class="k">import</span> <span class="s">"github.com/marshalldavidson61-arch/bindboss/pkg/bindboss"</span>
+
+<span class="k">func</span> packMyApp() <span class="k">error</span> {
+    opts := bindboss.PackOptions{
+        SrcDir:  <span class="s">"./myapp"</span>,
+        OutPath: <span class="s">"myapp-bin"</span>,
+        Run:     <span class="s">"python3 main.py"</span>,
+        Persist: <span class="k">true</span>,
+    }
+    <span class="k">return</span> bindboss.Pack(opts)
+}</pre>
+</div>
+
+<p>See the <code>pkg/bindboss/bindboss.go</code> source for the full options struct and available functions.</p>
+</section>
+
+<!-- ============================================================
+     REFERENCE: FULL TOML
+     ============================================================ -->
+<section class="section" id="ref-toml">
+<h1>Reference: Full TOML Schema</h1>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">toml</span><span class="fname">bindboss.toml — all fields</span></div>
+  <pre><span class="c"># ── Top level ────────────────────────────────────────────────</span>
+<span class="n">name</span>      = <span class="s">"myapp"</span>            <span class="c"># string, optional (defaults to binary filename)</span>
+<span class="n">run</span>       = <span class="s">"python3 main.py"</span> <span class="c"># string, REQUIRED</span>
+<span class="n">exec_mode</span> = <span class="s">"exec"</span>            <span class="c"># "exec" | "fork", default "exec"</span>
+<span class="n">env</span>       = [<span class="s">"KEY=value"</span>]     <span class="c"># []string, optional</span>
+
+<span class="c"># ── Dependencies (repeatable) ─────────────────────────────────</span>
+[[<span class="n">needs</span>]]
+<span class="n">name</span>    = <span class="s">"julia"</span>                         <span class="c"># string, required</span>
+<span class="n">check</span>   = <span class="s">"julia --version"</span>               <span class="c"># string, required (exit 0 = present)</span>
+<span class="n">url</span>     = <span class="s">"https://julialang.org/downloads/"</span> <span class="c"># string, required</span>
+<span class="n">message</span> = <span class="s">"Julia 1.9+ required."</span>           <span class="c"># string, optional</span>
+
+<span class="c"># ── Hooks ─────────────────────────────────────────────────────</span>
+[<span class="n">hooks</span>]
+<span class="n">pre_run</span>  = [<span class="s">"cmd arg1"</span>, <span class="s">"cmd2"</span>] <span class="c"># []string, no shell expansion</span>
+<span class="n">post_run</span> = []                  <span class="c"># []string, fork mode only on Unix</span>
+
+<span class="c"># ── Extraction ────────────────────────────────────────────────</span>
+[<span class="n">extract</span>]
+<span class="n">persist</span> = <span class="k">false</span>  <span class="c"># bool, reuse ~/.bindboss/<name>/ across runs</span>
+<span class="n">cleanup</span> = <span class="k">true</span>   <span class="c"># bool, delete tmpdir on exit (ignored if persist=true)</span>
+<span class="n">dir</span>     = <span class="s">""</span>     <span class="c"># string, override extract root (empty = use default)</span>
+
+<span class="c"># ── Install wizard (optional) ─────────────────────────────────</span>
+[<span class="n">install</span>]
+<span class="n">enabled</span>        = <span class="k">true</span>           <span class="c"># bool, master switch</span>
+<span class="n">install_file</span>   = <span class="s">"install.json"</span> <span class="c"># string, path relative to packed dir root</span>
+<span class="n">install_config</span> = <span class="s">""</span>             <span class="c"># string, inline JSON (overrides install_file)</span></pre>
+</div>
+</section>
+
+<!-- ============================================================
+     REFERENCE: ALL CLI FLAGS
+     ============================================================ -->
+<section class="section" id="ref-flags">
+<h1>Reference: All CLI Flags</h1>
+
+<table>
+  <thead><tr><th>Command</th><th>Flag</th><th>Type</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>pack</td><td>--run</td><td>string</td><td>Run command (required unless in TOML)</td></tr>
+    <tr><td>pack</td><td>--needs</td><td>string (repeatable)</td><td>"name,checkCmd,url[,message]"</td></tr>
+    <tr><td>pack</td><td>--persist</td><td>bool</td><td>Enable persist extraction</td></tr>
+    <tr><td>pack</td><td>--dir</td><td>string</td><td>Override extract root dir</td></tr>
+    <tr><td>pack</td><td>--target</td><td>string</td><td>Cross-compile target: GOOS/GOARCH</td></tr>
+    <tr><td>pack</td><td>--sign</td><td>string</td><td>Path to .key file for Ed25519 signing</td></tr>
+    <tr><td>inspect</td><td>--list</td><td>bool</td><td>Also list all packed files</td></tr>
+    <tr><td>verify</td><td>--pubkey</td><td>string</td><td>Path to .pub file for sig verification</td></tr>
+    <tr><td>keygen</td><td>--keydir</td><td>string</td><td>Override key output directory</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ============================================================
+     REFERENCE: FULL WIZARD SCHEMA
+     ============================================================ -->
+<section class="section" id="ref-wizard-schema">
+<h1>Reference: Full Wizard Schema</h1>
+
+<div class="code-block">
+  <div class="code-header"><span class="lang">json</span><span class="fname">install.json — complete schema</span></div>
+  <pre>{
+  <span class="s">"title"</span>:   <span class="s">"string"</span>,    <span class="c">// shown in every step header</span>
+  <span class="s">"version"</span>: <span class="s">"string"</span>,    <span class="c">// shown next to title</span>
+  <span class="s">"steps"</span>: [
+    {
+      <span class="c">// welcome step</span>
+      <span class="s">"type"</span>:    <span class="s">"welcome"</span>,
+      <span class="s">"title"</span>:   <span class="s">"string"</span>,
+      <span class="s">"content"</span>: <span class="s">"string"</span>   <span class="c">// \n for newlines</span>
+    },
+    {
+      <span class="c">// license step — user must type "accept"</span>
+      <span class="s">"type"</span>:    <span class="s">"license"</span>,
+      <span class="s">"title"</span>:   <span class="s">"string"</span>,
+      <span class="s">"content"</span>: <span class="s">"string"</span>   <span class="c">// full license text</span>
+    },
+    {
+      <span class="c">// deps step — check and download dependencies</span>
+      <span class="s">"type"</span>:  <span class="s">"deps"</span>,
+      <span class="s">"title"</span>: <span class="s">"string"</span>,
+      <span class="s">"deps"</span>: [
+        {
+          <span class="s">"name"</span>:         <span class="s">"string"</span>,  <span class="c">// required</span>
+          <span class="s">"check"</span>:        <span class="s">"string"</span>,  <span class="c">// required — command, exit 0 = present</span>
+          <span class="s">"download_url"</span>: <span class="s">"string"</span>,  <span class="c">// required* — direct download URL</span>
+          <span class="s">"fallback_url"</span>: <span class="s">"string"</span>,  <span class="c">// required* — browser fallback URL</span>
+          <span class="s">"file_name"</span>:    <span class="s">"string"</span>,  <span class="c">// optional — override downloaded filename</span>
+          <span class="s">"hash"</span>:         <span class="s">"string"</span>,  <span class="c">// optional — SHA-256 hex for verification</span>
+          <span class="s">"message"</span>:      <span class="s">"string"</span>   <span class="c">// optional — extra context shown to user</span>
+        }
+      ]
+    },
+    {
+      <span class="c">// message step — informational text</span>
+      <span class="s">"type"</span>:    <span class="s">"message"</span>,
+      <span class="s">"title"</span>:   <span class="s">"string"</span>,
+      <span class="s">"content"</span>: <span class="s">"string"</span>
+    },
+    {
+      <span class="c">// finish step — wizard ends here</span>
+      <span class="s">"type"</span>:    <span class="s">"finish"</span>,
+      <span class="s">"title"</span>:   <span class="s">"string"</span>,
+      <span class="s">"content"</span>: <span class="s">"string"</span>
+    }
+  ]
+}
+
+<span class="c">// * At least one of download_url or fallback_url must be provided per dep.</span></pre>
+</div>
+</section>
+
+<!-- ============================================================
+     REFERENCE: ERROR MESSAGES
+     ============================================================ -->
+<section class="section" id="ref-errors">
+<h1>Reference: Error Messages</h1>
+
+<p>All bindboss errors start with <code>[bindboss] !!! FATAL:</code>. Nothing is silent. Here are the common ones and what they mean:</p>
+
+<table>
+  <thead><tr><th>Error</th><th>Cause & Fix</th></tr></thead>
+  <tbody>
+    <tr><td>!!! FATAL: pack requires <directory> and <output> arguments</td><td>You ran <code>bindboss pack</code> with no positional args. Pass the source dir and output path.</td></tr>
+    <tr><td>!!! FATAL: no run command specified</td><td>No <code>run</code> in bindboss.toml and no <code>--run</code> flag. One of them must be set.</td></tr>
+    <tr><td>!!! FATAL: stub compilation failed</td><td>Go couldn't compile the stub. Make sure Go 1.22.3+ is installed and bindboss is run from its source directory (it needs <code>go.mod</code>).</td></tr>
+    <tr><td>!!! FATAL: cannot read install config</td><td>The <code>install_file</code> path doesn't exist in the packed directory. Check the path is relative to the packed dir root.</td></tr>
+    <tr><td>!!! FATAL: install config is not valid JSON</td><td>Your install.json has a syntax error. Validate it with <code>jq . install.json</code>.</td></tr>
+    <tr><td>!!! FATAL: install.enabled=true but no install_config or install_file</td><td>You set <code>enabled = true</code> but didn't provide a JSON source. Add <code>install_file</code> or <code>install_config</code>.</td></tr>
+    <tr><td>!!! FATAL: run command "X" not found on PATH</td><td>The runtime (julia, python3, bun…) is not in PATH at run time. The dep check should have caught this — did you set up <code>[[needs]]</code>?</td></tr>
+    <tr><td>!!! FATAL: cannot locate own executable</td><td>Rare. The stub couldn't find its own binary path — can happen in unusual proc environments.</td></tr>
+    <tr><td>!!! FATAL: BINDBOSS_VERIFY=1 but binary has no stored hash (v1 format)</td><td>You set <code>BINDBOSS_VERIFY=1</code> on a v1 binary. Repack with new bindboss to get v2 format with hash.</td></tr>
+  </tbody>
+</table>
+</section>
+
+<!-- ============================================================
+     REFERENCE: COMPATIBILITY
+     ============================================================ -->
+<section class="section" id="ref-compat">
+<h1>Reference: Compatibility</h1>
+
+<table>
+  <thead><tr><th>Platform</th><th>Pack</th><th>Run packed binary</th><th>exec mode</th></tr></thead>
+  <tbody>
+    <tr><td>Linux x86_64</td><td>✓</td><td>✓</td><td>exec (syscall.Exec)</td></tr>
+    <tr><td>Linux arm64</td><td>✓ (--target or native)</td><td>✓</td><td>exec</td></tr>
+    <tr><td>macOS x86_64</td><td>✓</td><td>✓</td><td>exec</td></tr>
+    <tr><td>macOS arm64 (M1/M2/M3)</td><td>✓</td><td>✓</td><td>exec</td></tr>
+    <tr><td>Windows x86_64</td><td>✓</td><td>✓</td><td>fork (always — no syscall.Exec on Windows)</td></tr>
+  </tbody>
+</table>
+
+<p>Go 1.22.3 or later is required to <strong>pack</strong>. No Go required to <strong>run</strong> a packed binary — the stub is statically compiled with <code>CGO_ENABLED=0</code>.</p>
+
+<h2>v1/v2 backward compatibility</h2>
+<p>The stub transparently reads both v1 (legacy, no hash) and v2 (current, SHA-256 + Ed25519 slot) binaries. You don't need to repack unless you want hash verification or signing. Repacking always produces v2.</p>
+
+<hr>
+<p style="text-align:center; color: var(--text3); font-size: 0.8rem;">bindboss · <a href="https://github.com/marshalldavidson61-arch/Bindboss" style="color:var(--accent)">github.com/marshalldavidson61-arch/Bindboss</a> · MIT License</p>
+</section>
+
+</div><!-- .content-wrap -->
+</main><!-- #main -->
+
+<a href="#top" class="back-to-top" id="back-to-top">↑</a>
+
+<script>
+// ── Scrollspy: highlight active nav link ────────────────────
+const sections = document.querySelectorAll('section[id], div[id="top"]');
+const navLinks = document.querySelectorAll('#sidebar nav a');
+const btt = document.getElementById('back-to-top');
+
+function getActiveSection() {
+  const scrollY = window.scrollY + 80;
+  let active = null;
+  sections.forEach(s => {
+    if (s.offsetTop <= scrollY) active = s.id;
+  });
+  return active;
+}
+
+function updateNav() {
+  const id = getActiveSection();
+  navLinks.forEach(a => {
+    const href = a.getAttribute('href').slice(1);
+    a.classList.toggle('active', href === id);
+  });
+  btt.classList.toggle('visible', window.scrollY > 300);
+}
+
+window.addEventListener('scroll', updateNav, { passive: true });
+updateNav();
+
+// ── Smooth scroll for nav links ──────────────────────────────
+navLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const id = a.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if (el) {
+      e.preventDefault();
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
+</script>
+</body>
+</html>
