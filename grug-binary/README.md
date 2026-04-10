@@ -14,13 +14,14 @@ chmod +x grugbot420
 ./grugbot420
 ```
 
-**First run** launches the interactive install wizard, which will:
-1. Show a welcome screen and license agreement
-2. Check that Julia 1.9+ is installed
-3. Offer to download Julia if it's missing
-4. Confirm configuration before starting
+**First run** launches the interactive install wizard:
+1. Welcome screen
+2. License agreement (type `accept` to proceed)
+3. Dependency check — detects Julia, downloads it if missing
+4. Configuration summary
+5. App starts automatically
 
-Every run after that goes straight to the `Brain >` prompt — the wizard only runs once.
+Every run after that goes straight to the `Brain >` prompt.
 
 To re-run the wizard at any time:
 ```bash
@@ -35,8 +36,7 @@ GrugBot is a neuromorphic AI engine. Many pattern nodes compete to respond to yo
 ## Integrity
 
 ```bash
-# verify the binary is intact (SHA-256 check)
 bindboss verify ./grugbot420
 ```
 
-Hash: `83aee33c72acca921e887fcdc6899e346d383610a4a993ac99b3be3abd6db2e2`
+Hash: `eeea4dd9f54e7287196701e4aedbac0e78348067b3f307fbe97849e25c0a03f0`
