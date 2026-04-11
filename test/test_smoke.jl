@@ -15,14 +15,29 @@ println("="^60)
 # ==============================================================================
 println("\n[1] MODULE LOADS")
 
-include("../src/stochastichelper.jl");       using .CoinFlipHeader;        println("  ✓ StochasticHelper")
-include("../src/patternscanner.jl");         using .PatternScanner;        println("  ✓ PatternScanner")
-include("../src/ImageSDF.jl");               using .ImageSDF;              println("  ✓ ImageSDF")
-include("../src/EyeSystem.jl");              using .EyeSystem;             println("  ✓ EyeSystem")
-include("../src/ChatterMode.jl");            using .ChatterMode;           println("  ✓ ChatterMode")
-include("../src/SemanticVerbs.jl");          using .SemanticVerbs;         println("  ✓ SemanticVerbs")
-include("../src/ActionTonePredictor.jl");    using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
-include("../src/engine.jl")
+# GRUG: Guard all includes to prevent double-define when running in runtests.jl suite
+if !isdefined(Main, :CoinFlipHeader); include("../src/stochastichelper.jl"); end
+using .CoinFlipHeader;        println("  ✓ StochasticHelper")
+
+if !isdefined(Main, :PatternScanner); include("../src/patternscanner.jl"); end
+using .PatternScanner;        println("  ✓ PatternScanner")
+
+if !isdefined(Main, :ImageSDF); include("../src/ImageSDF.jl"); end
+using .ImageSDF;              println("  ✓ ImageSDF")
+
+if !isdefined(Main, :EyeSystem); include("../src/EyeSystem.jl"); end
+using .EyeSystem;             println("  ✓ EyeSystem")
+
+if !isdefined(Main, :ChatterMode); include("../src/ChatterMode.jl"); end
+using .ChatterMode;           println("  ✓ ChatterMode")
+
+if !isdefined(Main, :SemanticVerbs); include("../src/SemanticVerbs.jl"); end
+using .SemanticVerbs;         println("  ✓ SemanticVerbs")
+
+if !isdefined(Main, :ActionTonePredictor); include("../src/ActionTonePredictor.jl"); end
+using .ActionTonePredictor;   println("  ✓ ActionTonePredictor")
+
+if !isdefined(Main, :words_to_signal); include("../src/engine.jl"); end
 println("  ✓ Engine (full chain)")
 
 # ==============================================================================
@@ -254,7 +269,7 @@ chatter_snapshot = [
 full_snapshot = vcat(chatter_snapshot, [("node_pad_$i", "pad pattern $i", "reason^1", rand()*5) for i in 1:1000])
 
 session = ChatterMode.start_chatter_session!(full_snapshot)
-@assert session.group_size >= 50 "FAIL: Group size should be >= 50!"
+@assert session.group_size >= 50 "FAIL: Group size should be >= 50 (ChatterMode selects 50-500)!"
 @assert session.end_time > session.start_time "FAIL: Session end time should be after start!"
 @assert !session.is_running "FAIL: Session should not be running after completion!"
 println("  ✓ Chatter session complete: group=$(session.group_size), exchanges=$(session.exchanges_completed), copies=$(session.copies_accepted)")

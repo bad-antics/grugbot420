@@ -10,17 +10,18 @@
 #   action_items :: Vector{Tuple{String, Float64, Vector{String}}} — (name, weight, per-action negs)
 # ==============================================================================
 
-include("../src/stochastichelper.jl"); using .CoinFlipHeader
-include("../src/patternscanner.jl");   using .PatternScanner
-include("../src/ImageSDF.jl");         using .ImageSDF
-include("../src/EyeSystem.jl");        using .EyeSystem
-include("../src/ChatterMode.jl");      using .ChatterMode
-include("../src/SemanticVerbs.jl");    using .SemanticVerbs
-include("../src/ActionTonePredictor.jl"); using .ActionTonePredictor
+# GRUG: Guard includes to prevent double-define in runtests.jl suite
+if !isdefined(Main, :CoinFlipHeader); include("../src/stochastichelper.jl"); end; using .CoinFlipHeader
+if !isdefined(Main, :PatternScanner); include("../src/patternscanner.jl"); end; using .PatternScanner
+if !isdefined(Main, :ImageSDF); include("../src/ImageSDF.jl"); end; using .ImageSDF
+if !isdefined(Main, :EyeSystem); include("../src/EyeSystem.jl"); end; using .EyeSystem
+if !isdefined(Main, :ChatterMode); include("../src/ChatterMode.jl"); end; using .ChatterMode
+if !isdefined(Main, :SemanticVerbs); include("../src/SemanticVerbs.jl"); end; using .SemanticVerbs
+if !isdefined(Main, :ActionTonePredictor); include("../src/ActionTonePredictor.jl"); end; using .ActionTonePredictor
 
 using JSON, Distributions, Random, Test
 
-include("../src/engine.jl")
+if !isdefined(Main, :words_to_signal); include("../src/engine.jl"); end
 
 println("\n" * "="^60)
 println("GRUG ACTION PACKET PARSER TEST SUITE")
