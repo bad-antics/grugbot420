@@ -18,8 +18,13 @@ println("="^60)
 # ==============================================================================
 println("\n[1] MODULE LOAD")
 
-include("../src/ImmuneSystem.jl")
-using .ImmuneSystem
+include("../src/stochastichelper.jl");  using .CoinFlipHeader
+include("../src/patternscanner.jl");   using .PatternScanner
+include("../src/ImageSDF.jl");         using .ImageSDF
+include("../src/EyeSystem.jl");        using .EyeSystem
+include("../src/SemanticVerbs.jl");    using .SemanticVerbs
+include("../src/ActionTonePredictor.jl"); using .ActionTonePredictor
+include("../src/ImmuneSystem.jl");     using .ImmuneSystem
 
 include("../src/engine.jl")
 println("  ✓ Engine module loaded (Vote struct available)")

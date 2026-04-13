@@ -40,13 +40,13 @@ ids = grow_nodes_from_packet(JSON.json(Dict(
     "nodes" => [
         Dict("pattern" => "fire makes grug warm",
              "action_packet" => "{\"actions\": [{\"name\": \"reason\", \"weight\": 1.0}]}",
-             "data" => Dict("system_prompt" => "grug logic cave")),
+             "json_data" => Dict("system_prompt" => "grug logic cave")),
         Dict("pattern" => "water puts out fire",
              "action_packet" => "{\"actions\": [{\"name\": \"analyze\", \"weight\": 1.0}]}",
-             "data" => Dict("system_prompt" => "grug logic cave")),
+             "json_data" => Dict("system_prompt" => "grug logic cave")),
         Dict("pattern" => "grug like shiny rocks",
              "action_packet" => "{\"actions\": [{\"name\": \"greet\", \"weight\": 1.0}]}",
-             "data" => Dict("system_prompt" => "grug happy cave")),
+             "json_data" => Dict("system_prompt" => "grug happy cave")),
     ]
 )))
 @assert length(ids) == 3 "FAIL: Expected 3 nodes grown, got $(length(ids))!"
@@ -433,10 +433,10 @@ attach_ids = grow_nodes_from_packet(JSON.json(Dict(
     "nodes" => [
         Dict("pattern" => "grug strong rock",
              "action_packet" => "{\"actions\": [{\"name\": \"reason\", \"weight\": 1.0}]}",
-             "data" => Dict("system_prompt" => "cave")),
+             "json_data" => Dict("system_prompt" => "cave")),
         Dict("pattern" => "rock falls down fast",
              "action_packet" => "{\"actions\": [{\"name\": \"analyze\", \"weight\": 1.0}]}",
-             "data" => Dict("system_prompt" => "cave")),
+             "json_data" => Dict("system_prompt" => "cave")),
     ]
 )))
 @assert length(attach_ids) == 2 "FAIL: Expected 2 new nodes for attachment test!"
