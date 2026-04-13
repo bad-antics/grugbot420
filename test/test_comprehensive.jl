@@ -471,8 +471,14 @@ println("  ✓ detach_node!: attachment removed")
 # ==============================================================================
 println("\n[21] VOTE CASTING")
 
-# Register a test command if not present (use an existing one)
-@assert haskey(COMMANDS, "reason") "FAIL: 'reason' command should be registered!"
+# GRUG: COMMANDS dict is populated in Main.jl action families. Engine tests don't
+# include Main.jl. Register minimal handlers for all action names used in test nodes.
+for _act in ["reason", "analyze", "greet", "flee", "ponder"]
+    if !haskey(COMMANDS, _act)
+        COMMANDS[_act] = (mission, node, pv, sv, uv, av) -> "test_$(string(_act))_output"
+    end
+end
+@assert haskey(COMMANDS, "reason") "FAIL: 'reason' command should be registered after manual registration!"
 
 # cast_vote on a known node
 test_vote_id = ids[1]
