@@ -99,17 +99,17 @@ println("  ✓ No single node dominates (all within expected range)")
 println("\n[5] SINGLE WINNER (NO TIE)")
 
 v_clear_winner = Vote("node_king", "reason", 5.0, String[], RelationalTriple[], RelationalTriple[], false)
-v_runner1 = Vote("node_r1", "greet", 4.94, String[], RelationalTriple[], RelationalTriple[], false)
+v_runner1 = Vote("node_r1", "greet", 4.96, String[], RelationalTriple[], RelationalTriple[], false)
 v_runner2 = Vote("node_r2", "flee", 3.0, String[], RelationalTriple[], RelationalTriple[], false)
 
 sorted_clear = sort([v_clear_winner, v_runner1, v_runner2]; by = v -> v.confidence, rev = true)
 max_clear = sorted_clear[1].confidence
 sure_clear = Vote[v for v in sorted_clear if v.confidence >= max_clear - 0.05]
 
-# v_clear_winner (5.0) and v_runner1 (4.94) are both within 0.05 of max
+# GRUG: v_clear_winner (5.0) and v_runner1 (4.96) are both within 0.05 of max (5.0 - 4.96 = 0.04)
 @assert length(sure_clear) == 2 "FAIL: Expected 2 sure votes, got $(length(sure_clear))!"
 
-# But exact tie detection should show only 1 (5.0 != 4.94)
+# But exact tie detection should show only 1 (5.0 != 4.96 — no exact tie)
 top_clear = sure_clear[1].confidence
 tied_clear = Vote[v for v in sure_clear if abs(v.confidence - top_clear) < 1e-9]
 @assert length(tied_clear) == 1 "FAIL: Expected 1 exact tie (clear winner), got $(length(tied_clear))!"
