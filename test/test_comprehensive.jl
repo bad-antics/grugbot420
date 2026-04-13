@@ -369,8 +369,8 @@ _, c3 = PatternScanner.high_res_scan(sig_full, sig_pat9; threshold=0.1)
 @assert c3 > 0.0 "FAIL: high_res_scan returned zero confidence!"
 println("  ✓ high_res_scan: conf=$(round(c3, digits=3))")
 
-# Bidirectional scan
-_, c4 = PatternScanner._bidirectional_cheap_scan(sig_full, sig_pat3; threshold=0.1)
+# Bidirectional scan — defined in engine.jl (Main scope), not PatternScanner
+_, c4 = _bidirectional_cheap_scan(sig_full, sig_pat3; threshold=0.1)
 @assert c4 > 0.0 "FAIL: _bidirectional_cheap_scan returned zero confidence!"
 println("  ✓ bidirectional_cheap_scan: conf=$(round(c4, digits=3))")
 
