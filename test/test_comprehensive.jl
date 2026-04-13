@@ -69,12 +69,16 @@ println("\n[3] PATTERN SCANNING")
 
 # GRUG: scan_specimens is stochastic (strength-biased coinflip). Retry up to 20 times.
 # With only 3 nodes in cave, node should fire within 20 tries with very high probability.
-results = Vector{Any}()
-for _attempt in 1:20
-    results = scan_specimens("fire makes grug warm and happy")
-    if !isempty(results)
-        break
+# GRUG: Use local binding to avoid Julia soft-scope ambiguity in for loop assignment.
+local results = let
+    found = Vector{Any}()
+    for _attempt in 1:20
+        found = scan_specimens("fire makes grug warm and happy")
+        if !isempty(found)
+            break
+        end
     end
+    found
 end
 @assert !isempty(results) "FAIL: scan_specimens returned empty after 20 attempts!"
 ids_found = Set(r[1] for r in results)
