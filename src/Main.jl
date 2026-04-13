@@ -804,6 +804,16 @@ const HELP_MSG = """
 ║    arousal, ID counters, brainstem state, attachments        ║
 ║                                                              ║
 ║  /help                      Show this scroll                ║
+╠══════════════════════════════════════════════════════════════╣
+║  🛡  IMMUNE SYSTEM (auto-gates all structure-storing cmds)  ║
+║  Gated: /grow /lobeGrow /addRule /pin /addVerb              ║
+║         /addRelationClass /addSynonym /newLobe              ║
+║         /connectLobes /negativeThesaurus-add                ║
+║         /loadSpecimen /nodeAttach /imgnodeAttach            ║
+║  Exempt: /mission and all read-only commands                ║
+║                                                              ║
+║  🎲  VOTE CERTAINTY  SURE=clear winner  UNSURE=ties exist   ║
+║  AIML tags: {VOTE_CERTAINTY}  {TIED_ALTERNATIVES}           ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 

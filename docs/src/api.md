@@ -177,3 +177,63 @@ Idle maintenance automata system with seven automata. Exported functions and typ
 ## Input Queue (`InputQueue`)
 
 Bounded input queue with integrated `NegativeThesaurus` inhibition filter. Strips inhibited tokens before pattern matching begins.
+
+## Immune System (`ImmuneSystem`)
+
+Automata-based anomaly detection for all structure-storing commands. Activates once the specimen reaches maturity (≥ 1000 nodes). Built around a shared `immune_gate()` helper in `Main.jl`.
+
+### Types
+
+- `ImmuneError` — Custom exception thrown when input is rejected. Fields: `kind::Symbol` (`:funky_deleted`, `:duplicate_anomaly`, etc.), `signature::UInt64` (hex fingerprint of the rejected input), `info::String` (human-readable reason).
+
+### Core Functions
+
+- `immune_scan!(input_text, node_count; is_critical=true) → (Symbol, UInt64)` — Main gate entry point. Returns `(status, signature)` where status is one of: `:immature` (below maturity threshold, pass-through), `:known` (familiar safe input), `:quarantine_patched` (funky but repaired), `:deleted` (rejected). Throws `ImmuneError` on hard rejection.
+- `reset_immune_state!()` — Clear all immune Hopfield memory and ledger. Called during specimen wipe/replace.
+- `serialize_immune_state() → Dict` — Export immune state (Hopfield memory + ledger) for specimen save.
+- `deserialize_immune_state!(data::Dict)` — Restore immune state from specimen data.
+
+### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MATURITY_THRESHOLD` | 1000 | Node count required before immune system activates |
+| `AUTOMATA_POPULATION_RATIO` | 1/3 | Automata count = nodes ÷ 3 |
+| `COINFLIP_PROBABILITY` | 0.5 | Per-agent materialization probability |
+| `PATCH_TIMEOUT_SECONDS` | 2.0 | Max time for patch attempt (±0.5s jitter) |
+| `HOPFIELD_FAMILIARITY_THRESHOLD` | 3 | Sightings before a signature is "strongly known" |
+
+### CLI Helper (`immune_gate`)
+
+```julia
+immune_gate(cmd_name, input_text; is_critical=true) → Bool
+```
+
+Shared helper in `Main.jl` used by all structure-storing commands. Returns `true` if input passed, `false` if rejected. Logs all decisions. Non-immune errors warn but do not block (immune system crash ≠ command block).
+
+## Vote Orchestrator (`ephemeral_aiml_orchestrator`)
+
+Main response generation entry point in `Main.jl`. Handles vote bucketing, tie-breaking, and AIML payload construction.
+
+### Vote Certainty
+
+- **SURE** — Primary vote had a clear confidence lead (no exact ties in the sure-vote basket)
+- **UNSURE** — Multiple votes tied at the same confidence; winner chosen randomly via `shuffle!`
+
+Tied alternatives (non-selected tied winners) are available as `Vote[]` via local variable `tied_alternatives`. Strong runner-ups that survived the coinflip enter `unsure_votes`.
+
+### AIML Rule Tags
+
+| Tag | Source |
+|-----|--------|
+| `{VOTE_CERTAINTY}` | `"SURE"` or `"UNSURE"` |
+| `{TIED_ALTERNATIVES}` | Comma-separated `node_id(action,conf=X.XX)` strings |
+| `{MISSION}` | Raw input text |
+| `{PRIMARY_ACTION}` | Winning vote's action name |
+| `{SURE_ACTIONS}` | Comma-separated action names from sure-vote basket |
+| `{UNSURE_ACTIONS}` | Comma-separated action names from unsure-vote coinflips |
+| `{ALL_ACTIONS}` | All actions from all votes |
+| `{CONFIDENCE}` | Primary vote confidence (2 decimal places) |
+| `{NODE_ID}` | Primary vote's node ID |
+| `{MEMORY}` | Formatted recent + pinned memory |
+| `{LOBE_CONTEXT}` | Prefrontal lobe context string |
