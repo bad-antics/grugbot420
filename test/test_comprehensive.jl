@@ -318,18 +318,19 @@ println("  ✓ Grave mechanism accessible (node currently is_grave=$(pre_grave))
 println("\n[15] STOCHASTIC HELPER")
 
 # Run @coinflip 200 times, verify both branches fire
-outcomes = String[]
+# GRUG: @coinflip returns outcome.name which is a Symbol (:yes/:no), not a String.
+outcomes = Symbol[]
 for _ in 1:200
     result = @coinflip [
-        bias(:yes, 50) => () -> "yes",
-        bias(:no,  50) => () -> "no"
+        bias(:yes, 50) => () -> :yes,
+        bias(:no,  50) => () -> :no
     ]
     push!(outcomes, result)
 end
-yes_count = count(x -> x == "yes", outcomes)
-no_count  = count(x -> x == "no",  outcomes)
-@assert yes_count > 0 "FAIL: 'yes' never fired in 200 trials!"
-@assert no_count  > 0 "FAIL: 'no' never fired in 200 trials!"
+yes_count = count(x -> x == :yes, outcomes)
+no_count  = count(x -> x == :no,  outcomes)
+@assert yes_count > 0 "FAIL: :yes never fired in 200 trials!"
+@assert no_count  > 0 "FAIL: :no never fired in 200 trials!"
 println("  ✓ @coinflip: yes=$yes_count no=$no_count in 200 trials")
 
 # ==============================================================================
