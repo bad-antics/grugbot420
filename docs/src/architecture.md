@@ -30,11 +30,11 @@ GrugBot420 is organized as a layered neuromorphic engine. This page describes th
 
 ## Node Lifecycle
 
-1. **Creation** — Nodes are planted via `/grow` with a pattern, action packet, and optional JSON data
+1. **Creation** — Nodes are planted via `/grow` (or `/lobeGrow`) after passing the immune gate
 2. **Scanning** — Input is converted to a signal vector; nodes compete via pattern matching with selective scan tiers (cheap/medium/high-res) based on both input complexity and per-node pattern complexity. Tier-1 (cheap scan) nodes use **bidirectional scanning**: forward pass + reverse-signal pass, confidence smoothed as the average of both. This catches order-reversed token matches that forward-only scanning misses.
 3. **Attachment Relay** — Nodes that fired are checked for attachments; attached nodes do a strength-biased coinflip and winners join the vote pool (Pass 3 of `scan_and_expand`)
 4. **Voting** — Matched nodes enter a superposition pool; action weights determine contribution
-5. **Selection** — BrainStem dispatches the winner via winner-take-all with stochastic override
+5. **Selection** — The orchestrator picks a winner. If multiple nodes tie at the same confidence, the tie is broken randomly via `shuffle!`. The result is classified as SURE (clear winner) or UNSURE (tie broken). Tied alternatives and strong runner-ups are reported.
 6. **Decay** — Unused nodes lose strength over time; grave nodes may be recycled by PhagyMode
 7. **Forensics** — During idle cycles, PhagyMode may roll Automaton 7 (Memory Forensics) to audit message history and node population health. This is read-only observation, never mutation.
 
@@ -175,4 +175,5 @@ Key properties:
 | `src/InputQueue.jl` | FIFO queue and NegativeThesaurus |
 | `src/ChatterMode.jl` | Idle gossip system |
 | `src/PhagyMode.jl` | 7 maintenance automata including memory forensics |
-| `src/Main.jl` | CLI loop, memory cave, specimen persistence |
+| `src/ImmuneSystem.jl` | Specimen immune system: AST scanning, Hopfield immune memory, quarantine→patch→delete pipeline. Gates all structure-storing commands. |
+| `src/Main.jl` | CLI loop, memory cave, specimen persistence, `immune_gate()` helper |

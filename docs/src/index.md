@@ -18,6 +18,8 @@ GrugBot420 models cognition through competing populations of pattern nodes — n
 - **Self-Healing (PhagyMode)** — Seven maintenance automata for orphan pruning, cache validation, memory forensics, and more
 - **Specimen Persistence** — Full cave state freeze/restore via gzip-compressed JSON snapshots
 - **Relational Fire (Node Attachments)** — User-defined relay circuitry: attach up to 4 nodes to any target; when the target fires, attachments coinflip to join the vote pool with pattern-derived confidence
+- **Specimen Immune System** — Automata-based anomaly detection gates all structure-storing commands: AST scan → Hopfield immune memory → quarantine → patch → delete pipeline. Activates at ≥ 1000 nodes
+- **Vote Tie-Breaking & Certainty** — Tied votes resolved randomly via `shuffle!`; responses classified SURE/UNSURE; tied alternatives and runner-ups listed with relational context; AIML tags `{VOTE_CERTAINTY}` and `{TIED_ALTERNATIVES}`
 
 ## Installation
 
