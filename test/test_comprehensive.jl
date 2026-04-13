@@ -167,14 +167,14 @@ result2 = add_orchestration_rule!("Primary: {PRIMARY_ACTION}. Mission: {MISSION}
 println("  ✓ Rules with {VOTE_CERTAINTY} and {TIED_ALTERNATIVES} added and stored correctly")
 
 # Confirm fake tag still rejected
-threw = false
+# GRUG: Use Ref to avoid Julia top-level soft scope issue with catch block assignment.
+_threw_ref = Ref(false)
 try
     add_orchestration_rule!("Bad tag: {FAKE_TAG}")
 catch e
-    threw = contains(string(e), "FAKE_TAG") || contains(string(e), "fake")
-    !threw && (threw = true)  # any error = rejection worked
+    _threw_ref[] = true  # any error = rejection worked
 end
-@assert threw "FAIL: Fake AIML tag {FAKE_TAG} should have been rejected!"
+@assert _threw_ref[] "FAIL: Fake AIML tag {FAKE_TAG} should have been rejected!"
 println("  ✓ Fake tag {FAKE_TAG} correctly rejected")
 
 # ==============================================================================
@@ -270,15 +270,16 @@ test_node = NODE_MAP[ids[1]]
 original_strength = test_node.strength
 
 # bump_strength! is coinflip-based — run many times to see at least one bump
-bumped = false
+# GRUG: Use Ref to avoid Julia top-level soft scope issue with for loop assignment.
+_bumped_ref = Ref(false)
 for _ in 1:50
     bump_strength!(test_node)
     if NODE_MAP[ids[1]].strength > original_strength
-        bumped = true
+        _bumped_ref[] = true
         break
     end
 end
-@assert bumped "FAIL: bump_strength! never increased strength in 50 trials!"
+@assert _bumped_ref[] "FAIL: bump_strength! never increased strength in 50 trials!"
 println("  ✓ bump_strength! successfully increased node strength")
 
 # Verify strength stays within bounds
@@ -398,24 +399,26 @@ empty!(AIML_DROP_TABLE)
 
 # Prob=1.0 rule must ALWAYS fire
 add_orchestration_rule!("Always fires [prob=1.0]")
-fires = 0
+# GRUG: Use Ref to avoid Julia top-level soft scope issue.
+_fires_ref = Ref(0)
 for _ in 1:50
     if rand() <= AIML_DROP_TABLE[1].fire_probability
-        fires += 1
+        _fires_ref[] += 1
     end
 end
-@assert fires == 50 "FAIL: prob=1.0 rule should fire all 50 times, fired $fires!"
+@assert _fires_ref[] == 50 "FAIL: prob=1.0 rule should fire all 50 times, fired $(_fires_ref[])!"
 println("  ✓ prob=1.0 rule fires all 50/50 times")
 
 # Prob=0.0 rule must NEVER fire
 add_orchestration_rule!("Never fires [prob=0.0]")
-never_fires = 0
+# GRUG: Use Ref to avoid Julia top-level soft scope issue.
+_never_ref = Ref(0)
 for _ in 1:50
     if rand() <= AIML_DROP_TABLE[2].fire_probability
-        never_fires += 1
+        _never_ref[] += 1
     end
 end
-@assert never_fires == 0 "FAIL: prob=0.0 rule should never fire, fired $never_fires!"
+@assert _never_ref[] == 0 "FAIL: prob=0.0 rule should never fire, fired $(_never_ref[])!"
 println("  ✓ prob=0.0 rule fires 0/50 times")
 
 # Prob=0.5 rule fires roughly half
