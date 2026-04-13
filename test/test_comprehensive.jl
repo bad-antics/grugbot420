@@ -249,12 +249,14 @@ end
 println("\n[11] HOPFIELD CACHE")
 
 # Record high-confidence nodes for a known input
+# GRUG: HOPFIELD_HIT_COUNT_MIN = 2, so need to record twice before lookup hits.
 input_hash = hopfield_input_hash("fire makes grug warm")
 hopfield_record!(input_hash, [ids[1]])
+hopfield_record!(input_hash, [ids[1]])  # second record crosses HOPFIELD_HIT_COUNT_MIN
 cached = hopfield_lookup(input_hash)
-@assert !isnothing(cached) "FAIL: Hopfield lookup returned nothing after recording!"
+@assert !isnothing(cached) "FAIL: Hopfield lookup returned nothing after 2 recordings!"
 @assert ids[1] in cached "FAIL: Hopfield cache missing recorded node!"
-println("  ✓ Hopfield record/lookup round-trip works")
+println("  ✓ Hopfield record/lookup round-trip works (2 records to cross HIT_COUNT_MIN)")
 
 # Unknown input hash should miss
 unknown_hash = hopfield_input_hash("completely unknown grug phrase xyz987")
