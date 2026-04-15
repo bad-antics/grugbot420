@@ -63,6 +63,11 @@ using .PhagyMode
 include("ImmuneSystem.jl")
 using .ImmuneSystem
 
+# GRUG: Immune thread pool — 8 dedicated side threads for immune processing.
+# All input waiting/collection happens here. Main cave never waits for immune work.
+include("ImmuneThreadPool.jl")
+using .ImmuneThreadPool
+
 include("engine.jl")
 include("Main.jl")
 
@@ -77,5 +82,10 @@ export add_verb!, add_relation_class!, add_synonym!
 export create_lobe!, connect_lobes!, lobe_grow!
 export create_lobe_table!
 export immune_scan!, get_immune_status, get_ledger_entries
+export create_immune_pool, submit_immune_work!, submit_and_wait!, kill_immune_pool!
+export restart_worker!, get_pool_status, get_worker_load
+export ImmuneFuture, ImmunePool
+export ImmuneWorkerDiedError, ImmunePoolOverloadError, ImmunePoolDeadError, ImmuneWorkerBalancerError
+export fetch_result, is_ready
 
 end # module GrugBot420
