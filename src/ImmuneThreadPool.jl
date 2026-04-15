@@ -5,10 +5,16 @@
 # Bad input gets processed here. Main cave NEVER WAITS for immune work.
 # If immune thread dies, IT SCREAMS LOUD. No hush. No quiet death.
 #
+# HARDCORE FEATURES:
+#   - Priority Lanes: CRITICAL > NORMAL > LOW > JUNK. Critical never waits.
+#   - Per-Source Rate Limiting: One spammer can't eat the whole immune budget.
+#   - Cost-Weighted Balancing: Expensive scans count heavier in load balancing.
+#   - Tripwire Metrics: If rejection rate spikes, system enters HARDENED mode.
+#
 # ARCHITECTURE:
 #   - 8 worker threads (ImmuneWorker). Each owns one inbox Channel.
 #   - ImmuneLoadBalancer: routes incoming scan requests to least-loaded worker.
-#   - ImmuneWaitingList: inputs sit here before being picked up by balancer.
+#   - ImmuneWaitingList: PRIORITY-AWARE inputs sit here before dispatch.
 #   - Main thread calls submit_immune_work! → WaitingList → Balancer → Worker.
 #   - Workers call ImmuneSystem.immune_scan! and return result via Future.
 #   - Non-blocking: submit_immune_work! returns immediately with a Future.
@@ -18,11 +24,13 @@
 #
 # GRUG RULES:
 #   1. Immune thread space is isolated. Main cave does not touch it directly.
-#   2. Load balancer distributes by least-queue-depth (cheapest bin fill).
-#   3. Waiting list is bounded (MAX_WAITING_LIST_SIZE). Overflow = LOUD ERROR.
-#   4. Worker crash = ImmuneWorkerDiedError thrown to all pending futures on that worker.
+#   2. Load balancer distributes by COST-WEIGHTED queue depth.
+#   3. Waiting list is PRIORITY-AWARE and bounded. Overflow = LOUD ERROR.
+#   4. Worker crash = ImmuneWorkerDiedError thrown to all pending futures.
 #   5. All state behind locks. Atomic counters for hot-path metrics.
 #   6. No @warn, no @info for failures. Only @error or throw. Grug not whisper.
+#   7. Per-source rate limiting. Spammer gets ImmuneRateLimitExhaustedError.
+#   8. Tripwire monitors rejection rate. Spikes trigger HARDENED mode.
 # ==============================================================================
 
 module ImmuneThreadPool
@@ -45,9 +53,12 @@ const NUM_IMMUNE_WORKERS = 8
 # Deep enough to buffer burst traffic. Overflow → WaitingList backs up → LOUD ERROR.
 const WORKER_CHANNEL_DEPTH = 64
 
-# GRUG: Maximum items sitting in the WaitingList before we scream.
-# If waiting list is full, system is overloaded. Caller must back off.
-const MAX_WAITING_LIST_SIZE = 512
+# GRUG: Maximum items sitting in the WaitingList PER PRIORITY LANE before we scream.
+# If a priority lane is full, that priority gets rejected (lower priorities still flow).
+const MAX_WAITING_LIST_SIZE_PER_PRIORITY = 128
+
+# GRUG: Total waiting list max across all priorities.
+const MAX_WAITING_LIST_SIZE = MAX_WAITING_LIST_SIZE_PER_PRIORITY * 4
 
 # GRUG: How often (seconds) the dispatcher wakes to drain WaitingList into workers.
 # Short interval = low latency. 0.5ms is plenty.
@@ -59,6 +70,163 @@ const WORKER_TAKE_TIMEOUT_S = 0.001
 
 # GRUG: Maximum retries to find a non-full worker before screaming.
 const BALANCER_MAX_RETRY = 16
+
+# ==============================================================================
+# PRIORITY LANES — GRUG: Critical inputs get FAST LANE. Junk gets SLOW LANE.
+# ==============================================================================
+
+"""
+    PriorityLevel
+
+GRUG: Priority lanes for immune work. Higher priority = processed first.
+- CRITICAL: User commands, direct interactions. NEVER starved.
+- NORMAL: Regular inputs, background scans.
+- LOW: Batch operations, bulk imports.
+- JUNK: Untrusted inputs, rate-limited sources, suspicious content.
+"""
+@enum PriorityLevel begin
+    PRIORITY_CRITICAL = 0
+    PRIORITY_NORMAL   = 1
+    PRIORITY_LOW      = 2
+    PRIORITY_JUNK     = 3
+end
+
+# GRUG: Priority order for dispatcher draining. CRITICAL first, JUNK last.
+const PRIORITY_DRAIN_ORDER = [PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW, PRIORITY_JUNK]
+
+# ==============================================================================
+# COST WEIGHTS — GRUG: Expensive scans cost more in load balancing.
+# ==============================================================================
+
+"""
+    ScanCost
+
+GRUG: Estimated cost of an immune scan. Used for cost-weighted load balancing.
+- COST_CHEAP: Simple text, few nodes. Weight = 1.
+- COST_MODERATE: Medium complexity. Weight = 2.
+- COST_EXPENSIVE: Complex AST, many nodes, deep nesting. Weight = 4.
+"""
+@enum ScanCost begin
+    COST_CHEAP     = 0
+    COST_MODERATE  = 1
+    COST_EXPENSIVE = 2
+end
+
+# GRUG: Cost weights for load balancing. Higher = counts more toward worker load.
+const COST_WEIGHTS = Dict(
+    COST_CHEAP     => 1,
+    COST_MODERATE  => 2,
+    COST_EXPENSIVE => 4
+)
+
+"""
+    estimate_scan_cost(node_count::Int) -> ScanCost
+
+GRUG: Estimate scan cost based on AST node count.
+Simple heuristic: more nodes = more expensive.
+"""
+function estimate_scan_cost(node_count::Int)::ScanCost
+    if node_count < 50
+        return COST_CHEAP
+    elseif node_count < 200
+        return COST_MODERATE
+    else
+        return COST_EXPENSIVE
+    end
+end
+
+# ==============================================================================
+# SOURCE IDENTIFICATION — GRUG: Who sent this input? Track for rate limiting.
+# ==============================================================================
+
+"""
+    SourceID
+
+GRUG: Identifies the source of an immune scan request.
+Used for per-source rate limiting. One source can't eat the whole budget.
+- source_type: :user, :api, :batch, :anonymous, :internal
+- source_id: Unique identifier (user ID, API key hash, IP hash, etc.)
+"""
+struct SourceID
+    source_type::Symbol
+    source_id::UInt64
+end
+
+# GRUG: Special source IDs
+const SOURCE_INTERNAL  = SourceID(:internal, 0x0000000000000000)
+const SOURCE_ANONYMOUS = SourceID(:anonymous, 0xFFFFFFFFFFFFFFFF)
+
+# ==============================================================================
+# RATE LIMITING CONSTANTS — GRUG: Per-source budgets. No single spammer wins.
+# ==============================================================================
+
+# GRUG: Tokens per second per source type. Spammer can't spam faster than this.
+const RATE_LIMIT_TOKENS_PER_SEC = Dict(
+    :user      => 10.0,   # 10 immune scans/sec per user
+    :api       => 5.0,    # 5 immune scans/sec per API key
+    :batch     => 2.0,    # 2 immune scans/sec for batch operations
+    :anonymous => 1.0,    # 1 immune scan/sec for anonymous
+    :internal  => 100.0   # 100 immune scans/sec for internal (unlimited for trusted)
+)
+
+# GRUG: Maximum burst tokens per source type. Allows brief bursts.
+const RATE_LIMIT_BURST = Dict(
+    :user      => 20,
+    :api       => 10,
+    :batch     => 5,
+    :anonymous => 3,
+    :internal  => 200
+)
+
+# GRUG: Hardened mode rate limits (tripwire triggered). Much stricter.
+const RATE_LIMIT_TOKENS_PER_SEC_HARDENED = Dict(
+    :user      => 2.0,
+    :api       => 1.0,
+    :batch     => 0.5,
+    :anonymous => 0.1,
+    :internal  => 50.0
+)
+
+const RATE_LIMIT_BURST_HARDENED = Dict(
+    :user      => 5,
+    :api       => 3,
+    :batch     => 2,
+    :anonymous => 1,
+    :internal  => 100
+)
+
+# ==============================================================================
+# TRIPWIRE CONSTANTS — GRUG: If rejection rate spikes, system gets SUSPICIOUS.
+# ==============================================================================
+
+"""
+    TripwireState
+
+GRUG: System state based on rejection rate monitoring.
+- TRIPWIRE_NORMAL: All clear. Normal operation.
+- TRIPWIRE_ELEVATED: Rejection rate above threshold. Watching closely.
+- TRIPWIRE_HARDENED: High rejection rate. Stricter rate limits. Alerts on.
+- TRIPWIRE_CRITICAL: System under attack. Maximum restrictions.
+"""
+@enum TripwireState begin
+    TRIPWIRE_NORMAL   = 0
+    TRIPWIRE_ELEVATED = 1
+    TRIPWIRE_HARDENED = 2
+    TRIPWIRE_CRITICAL = 3
+end
+
+# GRUG: Rejection rate thresholds (rejections / total processed in window).
+# Window is sliding, updated every TRIPWIRE_WINDOW_S seconds.
+const TRIPWIRE_WINDOW_S = 5.0  # 5 second sliding window
+const TRIPWIRE_ELEVATED_THRESHOLD = 0.1   # 10% rejection rate
+const TRIPWIRE_HARDENED_THRESHOLD = 0.25  # 25% rejection rate
+const TRIPWIRE_CRITICAL_THRESHOLD = 0.5   # 50% rejection rate
+
+# GRUG: Cooldown before returning to lower tripwire state (seconds).
+const TRIPWIRE_COOLDOWN_S = 30.0
+
+# GRUG: How often to check tripwire state (seconds).
+const TRIPWIRE_CHECK_INTERVAL_S = 1.0
 
 # ==============================================================================
 # ERROR TYPES — GRUG: ALL LOUD. NO WHISPERING.
@@ -88,11 +256,12 @@ System is overwhelmed. Caller must back off and retry.
 """
 struct ImmunePoolOverloadError <: Exception
     waiting_list_size::Int
+    priority::PriorityLevel
     msg::String
 end
 
 function Base.showerror(io::IO, e::ImmunePoolOverloadError)
-    print(io, "💀 IMMUNE POOL OVERLOADED! Waiting list at $(e.waiting_list_size). $(e.msg)")
+    print(io, "💀 IMMUNE POOL OVERLOADED! Priority $(e.priority) lane at $(e.waiting_list_size). $(e.msg)")
 end
 
 """
@@ -123,6 +292,257 @@ function Base.showerror(io::IO, e::ImmuneWorkerBalancerError)
     print(io, "💀 IMMUNE BALANCER STUCK! All 8 workers full. $(e.msg)")
 end
 
+"""
+    ImmuneRateLimitExhaustedError
+
+GRUG: Source has exhausted its rate limit budget.
+Too many submissions from this source. Back off.
+"""
+struct ImmuneRateLimitExhaustedError <: Exception
+    source::SourceID
+    retry_after_ms::Int
+    msg::String
+end
+
+function Base.showerror(io::IO, e::ImmuneRateLimitExhaustedError)
+    print(io, "💀 IMMUNE RATE LIMIT EXHAUSTED! Source $(e.source) must wait $(e.retry_after_ms)ms. $(e.msg)")
+end
+
+"""
+    ImmuneTripwireTriggeredError
+
+GRUG: Tripwire state changed. System entering or leaving hardened mode.
+This is informational but LOUD.
+"""
+struct ImmuneTripwireTriggeredError <: Exception
+    old_state::TripwireState
+    new_state::TripwireState
+    rejection_rate::Float64
+    msg::String
+end
+
+function Base.showerror(io::IO, e::ImmuneTripwireTriggeredError)
+    print(io, "⚠️ IMMUNE TRIPWIRE TRIGGERED! $(e.old_state) → $(e.new_state) (rejection rate: $(round(e.rejection_rate * 100, digits=1))%). $(e.msg)")
+end
+
+"""
+    ImmunePriorityInversionError
+
+GRUG: Critical priority items are starving behind lower priority junk.
+This should never happen if dispatcher is working correctly.
+"""
+struct ImmunePriorityInversionError <: Exception
+    critical_waiting::Int
+    lower_priority_processed::Int
+    msg::String
+end
+
+function Base.showerror(io::IO, e::ImmunePriorityInversionError)
+    print(io, "💀 IMMUNE PRIORITY INVERSION! $(e.critical_waiting) CRITICAL items waiting while $(e.lower_priority_processed) lower-priority processed. $(e.msg)")
+end
+
+# ==============================================================================
+# TOKEN BUCKET — GRUG: Per-source rate limiting bucket.
+# ==============================================================================
+
+"""
+    TokenBucket
+
+GRUG: Token bucket for rate limiting. One per source.
+Tokens refill at `rate` per second, up to `burst` max.
+"""
+mutable struct TokenBucket
+    tokens::Float64
+    rate::Float64         # tokens per second
+    burst::Int            # max tokens
+    last_refill::Float64  # timestamp of last refill
+    lock::ReentrantLock
+end
+
+function TokenBucket(rate::Float64, burst::Int)
+    return TokenBucket(
+        Float64(burst),  # Start full
+        rate,
+        burst,
+        time(),
+        ReentrantLock()
+    )
+end
+
+"""
+    try_consume!(bucket::TokenBucket, cost::Int = 1) -> Bool
+
+GRUG: Try to consume tokens from bucket. Returns true if successful.
+Refills tokens based on elapsed time since last call.
+"""
+function try_consume!(bucket::TokenBucket, cost::Int = 1)::Bool
+    lock(bucket.lock) do
+        now = time()
+        elapsed = now - bucket.last_refill
+        bucket.last_refill = now
+        
+        # GRUG: Refill tokens based on elapsed time
+        bucket.tokens = min(Float64(bucket.burst), bucket.tokens + elapsed * bucket.rate)
+        
+        # GRUG: Try to consume
+        if bucket.tokens >= Float64(cost)
+            bucket.tokens -= Float64(cost)
+            return true
+        end
+        return false
+    end
+end
+
+"""
+    time_to_next_token(bucket::TokenBucket) -> Float64
+
+GRUG: How long until at least one token is available (seconds).
+"""
+function time_to_next_token(bucket::TokenBucket)::Float64
+    lock(bucket.lock) do
+        if bucket.tokens >= 1.0
+            return 0.0
+        end
+        return (1.0 - bucket.tokens) / bucket.rate
+    end
+end
+
+"""
+    refill!(bucket::TokenBucket)
+
+GRUG: Force refill bucket (used when rate limits change).
+"""
+function refill!(bucket::TokenBucket)
+    lock(bucket.lock) do
+        bucket.tokens = Float64(bucket.burst)
+        bucket.last_refill = time()
+    end
+end
+
+# ==============================================================================
+# TRIPWIRE MONITOR — GRUG: Watches rejection rate, flips states.
+# ==============================================================================
+
+"""
+    TripwireMonitor
+
+GRUG: Tracks rejection rate in a sliding window. Triggers state changes.
+"""
+mutable struct TripwireMonitor
+    state::Atomic{Int}           # TripwireState as Int
+    window_start::Atomic{Float64}
+    window_processed::Atomic{Int}
+    window_rejected::Atomic{Int}
+    last_state_change::Atomic{Float64}
+    total_processed::Atomic{Int}
+    total_rejected::Atomic{Int}
+    lock::ReentrantLock
+end
+
+function TripwireMonitor()
+    return TripwireMonitor(
+        Atomic{Int}(Int(TRIPWIRE_NORMAL)),
+        Atomic{Float64}(time()),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        Atomic{Float64}(0.0),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        ReentrantLock()
+    )
+end
+
+"""
+    get_tripwire_state(mon::TripwireMonitor) -> TripwireState
+"""
+function get_tripwire_state(mon::TripwireMonitor)::TripwireState
+    return TripwireState(mon.state[])
+end
+
+"""
+    record_processed!(mon::TripwireMonitor; rejected::Bool = false)
+
+GRUG: Record a processed item. If rejected=true, counts toward rejection rate.
+"""
+function record_processed!(mon::TripwireMonitor; rejected::Bool = false)
+    atomic_add!(mon.window_processed, 1)
+    atomic_add!(mon.total_processed, 1)
+    if rejected
+        atomic_add!(mon.window_rejected, 1)
+        atomic_add!(mon.total_rejected, 1)
+    end
+end
+
+"""
+    get_rejection_rate(mon::TripwireMonitor) -> Float64
+
+GRUG: Get current rejection rate (0.0 to 1.0) in the sliding window.
+"""
+function get_rejection_rate(mon::TripwireMonitor)::Float64
+    processed = mon.window_processed[]
+    if processed == 0
+        return 0.0
+    end
+    return Float64(mon.window_rejected[]) / Float64(processed)
+end
+
+"""
+    update_tripwire_state!(mon::TripwireMonitor) -> Tuple{TripwireState, TripwireState}
+
+GRUG: Check rejection rate and potentially update tripwire state.
+Returns (old_state, new_state). Caller should handle state change.
+"""
+function update_tripwire_state!(mon::TripwireMonitor)::Tuple{TripwireState, TripwireState}
+    lock(mon.lock) do
+        now = time()
+        window_elapsed = now - mon.window_start[]
+        
+        # GRUG: Slide window if enough time has passed
+        if window_elapsed >= TRIPWIRE_WINDOW_S
+            mon.window_start[] = now
+            mon.window_processed[] = 0
+            mon.window_rejected[] = 0
+        end
+        
+        rejection_rate = get_rejection_rate(mon)
+        current_state = TripwireState(mon.state[])
+        new_state = current_state
+        
+        # GRUG: Check thresholds (only escalate, never skip states)
+        if rejection_rate >= TRIPWIRE_CRITICAL_THRESHOLD
+            new_state = TRIPWIRE_CRITICAL
+        elseif rejection_rate >= TRIPWIRE_HARDENED_THRESHOLD
+            if current_state != TRIPWIRE_CRITICAL
+                new_state = TRIPWIRE_HARDENED
+            end
+        elseif rejection_rate >= TRIPWIRE_ELEVATED_THRESHOLD
+            if current_state == TRIPWIRE_NORMAL
+                new_state = TRIPWIRE_ELEVATED
+            end
+        else
+            # GRUG: Cooldown before de-escalating
+            time_since_change = now - mon.last_state_change[]
+            if time_since_change >= TRIPWIRE_COOLDOWN_S
+                if current_state == TRIPWIRE_CRITICAL
+                    new_state = TRIPWIRE_HARDENED
+                elseif current_state == TRIPWIRE_HARDENED
+                    new_state = TRIPWIRE_ELEVATED
+                elseif current_state == TRIPWIRE_ELEVATED
+                    new_state = TRIPWIRE_NORMAL
+                end
+            end
+        end
+        
+        if new_state != current_state
+            mon.state[] = Int(new_state)
+            mon.last_state_change[] = now
+            return (current_state, new_state)
+        end
+        
+        return (current_state, current_state)
+    end
+end
+
 # ==============================================================================
 # IMMUNE FUTURE — Return handle for async immune scan results
 # ==============================================================================
@@ -142,6 +562,9 @@ Fields:
 - submitted_at:   when this was submitted
 - worker_id:      which worker is handling it (set by balancer)
 - request_id:     unique monotonic ID for this request
+- priority:       priority level of this request
+- source:         source ID of submitter (for rate limiting)
+- cost:           estimated scan cost
 """
 mutable struct ImmuneFuture
     result_channel::Channel{Any}  # delivers (status, sig) or an Exception
@@ -149,20 +572,26 @@ mutable struct ImmuneFuture
     submitted_at::Float64
     worker_id::Atomic{Int}        # -1 = not yet assigned
     request_id::UInt64
+    priority::PriorityLevel
+    source::SourceID
+    cost::ScanCost
 end
 
 """
-    ImmuneFuture(input_text::String, request_id::UInt64) -> ImmuneFuture
+    ImmuneFuture(input_text::String, request_id::UInt64, priority::PriorityLevel, source::SourceID, cost::ScanCost) -> ImmuneFuture
 
 Create a new future for a pending immune scan.
 """
-function ImmuneFuture(input_text::String, request_id::UInt64)
+function ImmuneFuture(input_text::String, request_id::UInt64, priority::PriorityLevel, source::SourceID, cost::ScanCost)
     return ImmuneFuture(
         Channel{Any}(1),
         input_text,
         time(),
         Atomic{Int}(-1),
-        request_id
+        request_id,
+        priority,
+        source,
+        cost
     )
 end
 
@@ -206,6 +635,9 @@ struct ImmuneWorkItem
     input_text::String
     node_count::Int
     is_critical::Bool
+    priority::PriorityLevel
+    cost::ScanCost
+    source::SourceID
     enqueued_at::Float64
 end
 
@@ -227,6 +659,7 @@ Fields:
 - alive:        Atomic Bool. true = running, false = dead/stopping
 - processed:    Atomic counter for diagnostics
 - errors:       Atomic counter for scan errors (rejected inputs etc.)
+- cost_load:    Atomic cumulative cost-weighted load
 - lock:         Lock for task reassignment during restart
 """
 mutable struct ImmuneWorker
@@ -236,44 +669,82 @@ mutable struct ImmuneWorker
     alive::Atomic{Bool}
     processed::Atomic{Int}
     errors::Atomic{Int}
+    cost_load::Atomic{Int}
     lock::ReentrantLock
 end
 
 # ==============================================================================
-# IMMUNE WAITING LIST — Bounded input buffer before load balancing
+# IMMUNE WAITING LIST — Priority-aware bounded input buffer
 # ==============================================================================
 
 """
     ImmuneWaitingList
 
-GRUG: The waiting room. Inputs arrive here before being dispatched to workers.
-Bounded. Overflow = LOUD ERROR. Main thread never blocks here.
-The dispatcher task drains this into worker inboxes.
+GRUG: The waiting room. PRIORITY-AWARE. Inputs arrive here before dispatch.
+Bounded per-priority. Overflow = LOUD ERROR for that priority.
+The dispatcher task drains this into worker inboxes, CRITICAL first.
 
 Fields:
-- items:    Vector of ImmuneWorkItem (FIFO, front = oldest)
-- lock:     Protects the items vector
-- size:     Atomic for fast non-locked size check
+- lanes:      Dict{PriorityLevel, Vector{ImmuneWorkItem}} - separate queues
+- lock:       Protects all lanes
+- size:       Atomic for fast non-locked total size check
+- lane_sizes: Atomic counters per lane for O(1) checks
 """
 mutable struct ImmuneWaitingList
-    items::Vector{ImmuneWorkItem}
+    lanes::Dict{PriorityLevel, Vector{ImmuneWorkItem}}
     lock::ReentrantLock
     size::Atomic{Int}
+    lane_sizes::Dict{PriorityLevel, Atomic{Int}}
 end
 
 function ImmuneWaitingList()
-    return ImmuneWaitingList(ImmuneWorkItem[], ReentrantLock(), Atomic{Int}(0))
+    lanes = Dict{PriorityLevel, Vector{ImmuneWorkItem}}()
+    lane_sizes = Dict{PriorityLevel, Atomic{Int}}()
+    for p in instances(PriorityLevel)
+        lanes[p] = ImmuneWorkItem[]
+        lane_sizes[p] = Atomic{Int}(0)
+    end
+    return ImmuneWaitingList(lanes, ReentrantLock(), Atomic{Int}(0), lane_sizes)
+end
+
+"""
+    get_lane_size(wl::ImmuneWaitingList, priority::PriorityLevel) -> Int
+
+GRUG: Get the size of a specific priority lane. O(1) atomic read.
+"""
+function get_lane_size(wl::ImmuneWaitingList, priority::PriorityLevel)::Int
+    return wl.lane_sizes[priority][]
+end
+
+"""
+    pop_next!(wl::ImmuneWaitingList) -> Union{ImmuneWorkItem, Nothing}
+
+GRUG: Pop the highest priority item available. CRITICAL first, JUNK last.
+Returns nothing if all lanes are empty.
+"""
+function pop_next!(wl::ImmuneWaitingList)::Union{ImmuneWorkItem, Nothing}
+    lock(wl.lock) do
+        for priority in PRIORITY_DRAIN_ORDER
+            if !isempty(wl.lanes[priority])
+                item = popfirst!(wl.lanes[priority])
+                atomic_sub!(wl.lane_sizes[priority], 1)
+                atomic_sub!(wl.size, 1)
+                return item
+            end
+        end
+        return nothing
+    end
 end
 
 # ==============================================================================
-# IMMUNE LOAD BALANCER — Routes work to least-loaded worker
+# IMMUNE LOAD BALANCER — Routes work to least-loaded worker (cost-weighted)
 # ==============================================================================
 
 """
     ImmuneLoadBalancer
 
 GRUG: Picks which worker gets the next job.
-Strategy: least-queue-depth (cheapest bin first filling).
+Strategy: COST-WEIGHTED least-queue-depth (cheapest bin first filling).
 If all workers full, throws ImmuneWorkerBalancerError LOUD.
 
 Fields:
@@ -286,25 +757,31 @@ mutable struct ImmuneLoadBalancer
 end
 
 """
-    pick_worker(balancer::ImmuneLoadBalancer)::ImmuneWorker
+    pick_worker(balancer::ImmuneLoadBalancer; cost::ScanCost = COST_CHEAP)::ImmuneWorker
 
-GRUG: Find the least-loaded alive worker.
+GRUG: Find the least-loaded alive worker, considering COST-WEIGHTED load.
 Returns the worker to dispatch to.
 Throws ImmuneWorkerBalancerError if all workers dead or all inboxes full.
 """
-function pick_worker(balancer::ImmuneLoadBalancer)::ImmuneWorker
-    # GRUG: Try to find least-loaded alive worker.
-    # If tie, use round-robin among tied workers.
+function pick_worker(balancer::ImmuneLoadBalancer; cost::ScanCost = COST_CHEAP)::ImmuneWorker
+    # GRUG: Try to find least-loaded alive worker using COST-WEIGHTED depth.
+    # Cost-weighted depth = queue_depth * average_cost + current_cost_load
     best_worker = nothing
-    best_depth = typemax(Int)
+    best_weighted_depth = typemax(Float64)
+    
+    cost_weight = COST_WEIGHTS[cost]
 
     for w in balancer.workers
         if !w.alive[]
             continue  # GRUG: Skip dead workers
         end
-        depth = Base.n_avail(w.inbox)
-        if depth < best_depth
-            best_depth = depth
+        queue_depth = Float64(Base.n_avail(w.inbox))
+        # GRUG: Cost-weighted load = queue items * avg_weight + accumulated cost
+        # Simplified: current depth * 2 (avg weight) + cost_load / 10
+        weighted_depth = queue_depth * 2.0 + Float64(w.cost_load[]) / 10.0
+        
+        if weighted_depth < best_weighted_depth
+            best_weighted_depth = weighted_depth
             best_worker = w
         end
     end
@@ -341,11 +818,123 @@ function isfull(ch::Channel)::Bool
 end
 
 # ==============================================================================
+# RATE LIMITER — Per-source token bucket management
+# ==============================================================================
+
+"""
+    ImmuneRateLimiter
+
+GRUG: Manages per-source rate limiting. One bucket per source.
+Cleans up stale buckets to prevent memory leak.
+"""
+mutable struct ImmuneRateLimiter
+    buckets::Dict{SourceID, TokenBucket}
+    last_access::Dict{SourceID, Float64}
+    lock::ReentrantLock
+    tripwire_monitor::TripwireMonitor
+end
+
+function ImmuneRateLimiter(tripwire::TripwireMonitor)
+    return ImmuneRateLimiter(
+        Dict{SourceID, TokenBucket}(),
+        Dict{SourceID, Float64}(),
+        ReentrantLock(),
+        tripwire
+    )
+end
+
+"""
+    get_or_create_bucket!(rl::ImmuneRateLimiter, source::SourceID) -> TokenBucket
+
+GRUG: Get or create a token bucket for a source.
+Rate limits depend on current tripwire state.
+"""
+function get_or_create_bucket!(rl::ImmuneRateLimiter, source::SourceID)::TokenBucket
+    lock(rl.lock) do
+        now = time()
+        
+        # GRUG: Clean up stale buckets (not accessed in 5 minutes)
+        stale_cutoff = now - 300.0
+        stale_sources = [s for (s, t) in rl.last_access if t < stale_cutoff]
+        for s in stale_sources
+            delete!(rl.buckets, s)
+            delete!(rl.last_access, s)
+        end
+        
+        # GRUG: Get or create bucket
+        if !haskey(rl.buckets, source)
+            state = get_tripwire_state(rl.tripwire_monitor)
+            if state >= TRIPWIRE_HARDENED
+                rate = get(RATE_LIMIT_TOKENS_PER_SEC_HARDENED, source.source_type, 1.0)
+                burst = get(RATE_LIMIT_BURST_HARDENED, source.source_type, 5)
+            else
+                rate = get(RATE_LIMIT_TOKENS_PER_SEC, source.source_type, 1.0)
+                burst = get(RATE_LIMIT_BURST, source.source_type, 10)
+            end
+            rl.buckets[source] = TokenBucket(rate, burst)
+        end
+        
+        rl.last_access[source] = now
+        return rl.buckets[source]
+    end
+end
+
+"""
+    try_consume_rate_limit!(rl::ImmuneRateLimiter, source::SourceID, cost::Int = 1) -> Bool
+
+GRUG: Try to consume rate limit tokens for a source.
+Returns true if successful, false if rate limited.
+"""
+function try_consume_rate_limit!(rl::ImmuneRateLimiter, source::SourceID, cost::Int = 1)::Bool
+    # GRUG: Internal sources bypass rate limiting
+    if source.source_type == :internal
+        return true
+    end
+    
+    bucket = get_or_create_bucket!(rl, source)
+    return try_consume!(bucket, cost)
+end
+
+"""
+    get_retry_after_ms(rl::ImmuneRateLimiter, source::SourceID) -> Int
+
+GRUG: How many milliseconds until source can retry.
+"""
+function get_retry_after_ms(rl::ImmuneRateLimiter, source::SourceID)::Int
+    if source.source_type == :internal
+        return 0
+    end
+    
+    bucket = get_or_create_bucket!(rl, source)
+    return round(Int, time_to_next_token(bucket) * 1000)
+end
+
+"""
+    update_buckets_for_tripwire!(rl::ImmuneRateLimiter, new_state::TripwireState)
+
+GRUG: Update all bucket rates when tripwire state changes.
+"""
+function update_buckets_for_tripwire!(rl::ImmuneRateLimiter, new_state::TripwireState)
+    lock(rl.lock) do
+        for (source, bucket) in rl.buckets
+            if new_state >= TRIPWIRE_HARDENED
+                bucket.rate = get(RATE_LIMIT_TOKENS_PER_SEC_HARDENED, source.source_type, 1.0)
+                bucket.burst = get(RATE_LIMIT_BURST_HARDENED, source.source_type, 5)
+            else
+                bucket.rate = get(RATE_LIMIT_TOKENS_PER_SEC, source.source_type, 1.0)
+                bucket.burst = get(RATE_LIMIT_BURST, source.source_type, 10)
+            end
+            refill!(bucket)
+        end
+    end
+end
+
+# ==============================================================================
 # IMMUNE THREAD POOL — The whole immune cave
 # ==============================================================================
 
 """
-    ImmuneThreadPool
+    ImmunePool
 
 GRUG: The whole immune cave. Eight workers. One dispatcher. One waiting list.
 Submit work here. Pool handles everything. Main cave stays clean.
@@ -360,7 +949,10 @@ Fields:
 - submitted:     Atomic{Int} total submitted count
 - dispatched:    Atomic{Int} total dispatched to workers
 - rejected:      Atomic{Int} total immune rejections (not pool errors)
+- rate_limited:  Atomic{Int} total rate-limited rejections
 - pool_lock:     ReentrantLock for pool-level operations
+- tripwire:      TripwireMonitor for rejection rate tracking
+- rate_limiter:  ImmuneRateLimiter for per-source rate limiting
 """
 mutable struct ImmunePool
     workers::Vector{ImmuneWorker}
@@ -372,7 +964,10 @@ mutable struct ImmunePool
     submitted::Atomic{Int}
     dispatched::Atomic{Int}
     rejected::Atomic{Int}
+    rate_limited::Atomic{Int}
     pool_lock::ReentrantLock
+    tripwire::TripwireMonitor
+    rate_limiter::ImmuneRateLimiter
 end
 
 # ==============================================================================
@@ -380,7 +975,7 @@ end
 # ==============================================================================
 
 """
-    _worker_loop(worker::ImmuneWorker, immune_module)
+    _worker_loop(worker::ImmuneWorker, immune_module, pool::ImmunePool)
 
 GRUG: The inner loop of one immune worker.
 Drains its inbox. Runs immune_scan! on each item.
@@ -390,7 +985,7 @@ If anything ELSE throws → worker is considered dead, screams, poisons futures.
 
 immune_module: The ImmuneSystem module reference passed in at pool creation.
 """
-function _worker_loop(worker::ImmuneWorker, immune_module)
+function _worker_loop(worker::ImmuneWorker, immune_module, pool::ImmunePool)
     worker.alive[] = true
 
     # GRUG: Worker stays alive until pool shuts down or fatal error
@@ -416,6 +1011,9 @@ function _worker_loop(worker::ImmuneWorker, immune_module)
             break
         end
 
+        # GRUG: Update cost load
+        atomic_add!(worker.cost_load, COST_WEIGHTS[item.cost])
+
         # GRUG: We have work. Do the immune scan.
         try
             result = immune_module.immune_scan!(
@@ -426,6 +1024,7 @@ function _worker_loop(worker::ImmuneWorker, immune_module)
             # GRUG: Success. Deliver result to future.
             put!(item.future.result_channel, result)
             atomic_add!(worker.processed, 1)
+            record_processed!(pool.tripwire, rejected=false)
 
         catch e
             atomic_add!(worker.errors, 1)
@@ -436,6 +1035,8 @@ function _worker_loop(worker::ImmuneWorker, immune_module)
                 # Caller who fetch_result()s will see the ImmuneError thrown at them.
                 put!(item.future.result_channel, e)
                 atomic_add!(worker.processed, 1)
+                record_processed!(pool.tripwire, rejected=true)
+                atomic_add!(pool.rejected, 1)
 
             else
                 # GRUG: Unexpected error in immune_scan!. This is a REAL crash.
@@ -451,18 +1052,23 @@ function _worker_loop(worker::ImmuneWorker, immune_module)
                 # Those will be caught by the outer try/catch below.
             end
         end
+
+        # GRUG: Decay cost load over time (simple approach: subtract 1 each cycle)
+        if worker.cost_load[] > 0
+            atomic_sub!(worker.cost_load, 1)
+        end
     end
 
     worker.alive[] = false
 end
 
 """
-    _start_worker(id::Int, immune_module) -> ImmuneWorker
+    _start_worker(id::Int, immune_module, pool::ImmunePool) -> ImmuneWorker
 
 GRUG: Spawn a new immune worker on a background task.
 Returns the worker struct with running task.
 """
-function _start_worker(id::Int, immune_module)::ImmuneWorker
+function _start_worker(id::Int, immune_module, pool::ImmunePool)::ImmuneWorker
     inbox = Channel{ImmuneWorkItem}(WORKER_CHANNEL_DEPTH)
     worker = ImmuneWorker(
         id,
@@ -471,12 +1077,13 @@ function _start_worker(id::Int, immune_module)::ImmuneWorker
         Atomic{Bool}(false),
         Atomic{Int}(0),
         Atomic{Int}(0),
+        Atomic{Int}(0),
         ReentrantLock()
     )
 
     worker.task = @async begin
         try
-            _worker_loop(worker, immune_module)
+            _worker_loop(worker, immune_module, pool)
         catch fatal_e
             # GRUG: Worker died with a fatal error (OOM etc). SCREAM LOUD.
             @error "💀 IMMUNE WORKER #$id FATALLY CRASHED" exception=(fatal_e, catch_backtrace())
@@ -507,7 +1114,7 @@ end
     _dispatcher_loop(pool::ImmunePool)
 
 GRUG: Background task. Wakes every DISPATCHER_SLEEP_S seconds.
-Drains the waiting list into worker inboxes via load balancer.
+Drains the waiting list (CRITICAL first) into worker inboxes via load balancer.
 If balancer throws (all workers dead/full), dispatcher screams too.
 Dispatcher death = pool death. Pool should be restarted.
 """
@@ -516,15 +1123,8 @@ function _dispatcher_loop(pool::ImmunePool)
         # GRUG: Drain as many items from waiting list as possible this cycle
         drained = 0
         while true
-            # GRUG: Grab next item from waiting list (under lock)
-            item = lock(pool.waiting_list.lock) do
-                if isempty(pool.waiting_list.items)
-                    return nothing
-                end
-                it = popfirst!(pool.waiting_list.items)
-                atomic_sub!(pool.waiting_list.size, 1)
-                return it
-            end
+            # GRUG: Grab next item from waiting list (priority-aware)
+            item = pop_next!(pool.waiting_list)
 
             if item === nothing
                 break  # GRUG: Waiting list is empty. Rest.
@@ -532,18 +1132,19 @@ function _dispatcher_loop(pool::ImmunePool)
 
             # GRUG: Route item to a worker via load balancer
             try
-                worker = pick_worker(pool.balancer)
+                worker = pick_worker(pool.balancer; cost=item.cost)
                 item.future.worker_id[] = worker.id
                 put!(worker.inbox, item)
                 atomic_add!(pool.dispatched, 1)
                 drained += 1
             catch e
                 if e isa ImmuneWorkerBalancerError
-                    # GRUG: All workers full or dead. Put item BACK at front of list.
+                    # GRUG: All workers full or dead. Put item BACK at front of correct lane.
                     # Log it loud. Don't silently drop.
                     @error "💀 IMMUNE DISPATCHER: Balancer failed, re-queuing item" exception=e
                     lock(pool.waiting_list.lock) do
-                        pushfirst!(pool.waiting_list.items, item)
+                        pushfirst!(pool.waiting_list.lanes[item.priority], item)
+                        atomic_add!(pool.waiting_list.lane_sizes[item.priority], 1)
                         atomic_add!(pool.waiting_list.size, 1)
                     end
                     break  # Stop draining this cycle, try again next tick
@@ -563,6 +1164,38 @@ function _dispatcher_loop(pool::ImmunePool)
 end
 
 # ==============================================================================
+# TRIPWIRE CHECK LOOP — Monitors rejection rate
+# ==============================================================================
+
+"""
+    _tripwire_loop(pool::ImmunePool)
+
+GRUG: Background task. Wakes every TRIPWIRE_CHECK_INTERVAL_S seconds.
+Checks rejection rate and updates tripwire state.
+If state changes, updates rate limiter buckets.
+"""
+function _tripwire_loop(pool::ImmunePool)
+    while pool.alive[]
+        old_state, new_state = update_tripwire_state!(pool.tripwire)
+        
+        if old_state != new_state
+            # GRUG: State changed! Update rate limiter and log LOUD.
+            @error "⚠️ IMMUNE TRIPWIRE STATE CHANGE: $old_state → $new_state"
+            
+            # GRUG: Update rate limiter buckets for new thresholds
+            update_buckets_for_tripwire!(pool.rate_limiter, new_state)
+            
+            # GRUG: If entering CRITICAL, this is a big deal
+            if new_state == TRIPWIRE_CRITICAL
+                @error "🚨 IMMUNE SYSTEM IN CRITICAL MODE! HIGH REJECTION RATE DETECTED!"
+            end
+        end
+        
+        sleep(TRIPWIRE_CHECK_INTERVAL_S)
+    end
+end
+
+# ==============================================================================
 # PUBLIC API — Create, use, and shut down the immune pool
 # ==============================================================================
 
@@ -576,8 +1209,28 @@ Returns a running ImmunePool.
 This should be called ONCE at bot startup. Keep the pool alive for the bot's lifetime.
 """
 function create_immune_pool(immune_module)::ImmunePool
-    # GRUG: Spawn 8 workers
-    workers = [_start_worker(i, immune_module) for i in 1:NUM_IMMUNE_WORKERS]
+    # GRUG: Create tripwire monitor and rate limiter first
+    tripwire = TripwireMonitor()
+    rate_limiter = ImmuneRateLimiter(tripwire)
+
+    # GRUG: Spawn 8 workers (with dummy pool for now)
+    dummy_pool = nothing
+    
+    workers = ImmuneWorker[]
+    for i in 1:NUM_IMMUNE_WORKERS
+        inbox = Channel{ImmuneWorkItem}(WORKER_CHANNEL_DEPTH)
+        worker = ImmuneWorker(
+            i,
+            inbox,
+            Task(() -> nothing),
+            Atomic{Bool}(false),
+            Atomic{Int}(0),
+            Atomic{Int}(0),
+            Atomic{Int}(0),
+            ReentrantLock()
+        )
+        push!(workers, worker)
+    end
 
     # Small yield to let workers start their loops
     yield()
@@ -598,8 +1251,23 @@ function create_immune_pool(immune_module)::ImmunePool
         Atomic{Int}(0),
         Atomic{Int}(0),
         Atomic{Int}(0),
-        ReentrantLock()
+        Atomic{Int}(0),
+        ReentrantLock(),
+        tripwire,
+        rate_limiter
     )
+
+    # GRUG: Now properly start workers with reference to pool
+    for i in 1:NUM_IMMUNE_WORKERS
+        workers[i].task = @async begin
+            try
+                _worker_loop(workers[i], immune_module, pool)
+            catch fatal_e
+                @error "💀 IMMUNE WORKER #$i FATALLY CRASHED" exception=(fatal_e, catch_backtrace())
+                workers[i].alive[] = false
+            end
+        end
+    end
 
     # GRUG: Start the dispatcher
     pool.dispatcher = @async begin
@@ -611,6 +1279,15 @@ function create_immune_pool(immune_module)::ImmunePool
         end
     end
 
+    # GRUG: Start the tripwire monitor
+    @async begin
+        try
+            _tripwire_loop(pool)
+        catch e
+            @error "💀 IMMUNE TRIPWIRE MONITOR CRASHED" exception=(e, catch_backtrace())
+        end
+    end
+
     return pool
 end
 
@@ -619,16 +1296,29 @@ end
         pool::ImmunePool,
         input_text::String,
         node_count::Int;
-        is_critical::Bool = true
+        is_critical::Bool = true,
+        priority::PriorityLevel = PRIORITY_NORMAL,
+        source::SourceID = SOURCE_ANONYMOUS
     ) -> ImmuneFuture
 
 GRUG: Submit an input to the immune thread pool for scanning.
 Returns immediately with an ImmuneFuture. NEVER BLOCKS MAIN CAVE.
 Input goes to WaitingList → Dispatcher → Worker → Future.
 
+Priority lanes:
+- PRIORITY_CRITICAL: Never starves. Always processed first.
+- PRIORITY_NORMAL: Default for most inputs.
+- PRIORITY_LOW: Batch operations.
+- PRIORITY_JUNK: Untrusted inputs. Processed last.
+
+Rate limiting:
+- Per-source rate limiting applied.
+- Throws ImmuneRateLimitExhaustedError if source has no budget.
+
 Throws:
 - ImmunePoolDeadError: if pool is not running
-- ImmunePoolOverloadError: if waiting list is full
+- ImmunePoolOverloadError: if waiting list lane is full
+- ImmuneRateLimitExhaustedError: if source has exhausted rate limit
 
 No silent failures. If submit throws, caller knows immediately.
 """
@@ -636,7 +1326,9 @@ function submit_immune_work!(
     pool::ImmunePool,
     input_text::String,
     node_count::Int;
-    is_critical::Bool = true
+    is_critical::Bool = true,
+    priority::PriorityLevel = PRIORITY_NORMAL,
+    source::SourceID = SOURCE_ANONYMOUS
 )::ImmuneFuture
 
     # GRUG: Guard — pool must be alive
@@ -651,31 +1343,50 @@ function submit_immune_work!(
         error("!!! FATAL: submit_immune_work! got empty input_text! !!!")
     end
 
-    # GRUG: Guard — waiting list not full
-    current_size = pool.waiting_list.size[]
-    if current_size >= MAX_WAITING_LIST_SIZE
+    # GRUG: Check rate limiting
+    cost = estimate_scan_cost(node_count)
+    cost_weight = COST_WEIGHTS[cost]
+    
+    if !try_consume_rate_limit!(pool.rate_limiter, source, cost_weight)
+        retry_ms = get_retry_after_ms(pool.rate_limiter, source)
+        atomic_add!(pool.rate_limited, 1)
+        throw(ImmuneRateLimitExhaustedError(
+            source,
+            retry_ms,
+            "Source has exhausted its immune scan budget. Wait $(retry_ms)ms and retry."
+        ))
+    end
+
+    # GRUG: Guard — waiting list lane not full
+    lane_size = get_lane_size(pool.waiting_list, priority)
+    if lane_size >= MAX_WAITING_LIST_SIZE_PER_PRIORITY
         throw(ImmunePoolOverloadError(
-            current_size,
-            "Immune pool waiting list full ($current_size/$(MAX_WAITING_LIST_SIZE)). " *
-            "Main cave is submitting faster than immune workers can process. Back off."
+            lane_size,
+            priority,
+            "Immune pool $(priority) lane full ($lane_size/$(MAX_WAITING_LIST_SIZE_PER_PRIORITY)). " *
+            "Back off or use lower priority."
         ))
     end
 
     # GRUG: Create request ID and future
     req_id = UInt64(atomic_add!(pool.request_counter, 1))
-    future = ImmuneFuture(input_text, req_id)
+    future = ImmuneFuture(input_text, req_id, priority, source, cost)
 
     item = ImmuneWorkItem(
         future,
         input_text,
         node_count,
         is_critical,
+        priority,
+        cost,
+        source,
         time()
     )
 
-    # GRUG: Push to waiting list (under lock)
+    # GRUG: Push to correct priority lane (under lock)
     lock(pool.waiting_list.lock) do
-        push!(pool.waiting_list.items, item)
+        push!(pool.waiting_list.lanes[priority], item)
+        atomic_add!(pool.waiting_list.lane_sizes[priority], 1)
         atomic_add!(pool.waiting_list.size, 1)
     end
 
@@ -688,7 +1399,9 @@ end
         pool::ImmunePool,
         input_text::String,
         node_count::Int;
-        is_critical::Bool = true
+        is_critical::Bool = true,
+        priority::PriorityLevel = PRIORITY_NORMAL,
+        source::SourceID = SOURCE_ANONYMOUS
     ) -> Tuple{Symbol, UInt64}
 
 GRUG: Submit AND wait for result. Blocking convenience wrapper.
@@ -701,10 +1414,13 @@ function submit_and_wait!(
     pool::ImmunePool,
     input_text::String,
     node_count::Int;
-    is_critical::Bool = true
+    is_critical::Bool = true,
+    priority::PriorityLevel = PRIORITY_NORMAL,
+    source::SourceID = SOURCE_ANONYMOUS
 )::Tuple{Symbol, UInt64}
 
-    future = submit_immune_work!(pool, input_text, node_count; is_critical=is_critical)
+    future = submit_immune_work!(pool, input_text, node_count; 
+        is_critical=is_critical, priority=priority, source=source)
     return fetch_result(future)
 end
 
@@ -731,15 +1447,17 @@ function kill_immune_pool!(pool::ImmunePool)
     end
 
     # GRUG: Poison remaining items in waiting list
-    remaining = lock(pool.waiting_list.lock) do
-        items = copy(pool.waiting_list.items)
-        empty!(pool.waiting_list.items)
+    remaining_items = ImmuneWorkItem[]
+    lock(pool.waiting_list.lock) do
+        for priority in instances(PriorityLevel)
+            append!(remaining_items, pool.waiting_list.lanes[priority])
+            empty!(pool.waiting_list.lanes[priority])
+        end
         pool.waiting_list.size[] = 0
-        items
     end
 
     shutdown_error = ImmunePoolDeadError("Immune pool was shut down while item was waiting.")
-    for item in remaining
+    for item in remaining_items
         if isopen(item.future.result_channel)
             put!(item.future.result_channel, shutdown_error)
         end
@@ -771,7 +1489,26 @@ function restart_worker!(pool::ImmunePool, worker_id::Int, immune_module)
         close(old_worker.inbox)
     end
 
-    new_worker = _start_worker(worker_id, immune_module)
+    inbox = Channel{ImmuneWorkItem}(WORKER_CHANNEL_DEPTH)
+    new_worker = ImmuneWorker(
+        worker_id,
+        inbox,
+        Task(() -> nothing),
+        Atomic{Bool}(false),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        Atomic{Int}(0),
+        ReentrantLock()
+    )
+
+    new_worker.task = @async begin
+        try
+            _worker_loop(new_worker, immune_module, pool)
+        catch fatal_e
+            @error "💀 IMMUNE WORKER #$worker_id FATALLY CRASHED" exception=(fatal_e, catch_backtrace())
+            new_worker.alive[] = false
+        end
+    end
 
     lock(pool.pool_lock) do
         pool.workers[worker_id] = new_worker
@@ -800,12 +1537,18 @@ function get_pool_status(pool::ImmunePool)::Dict{String, Any}
             "alive"       => w.alive[],
             "processed"   => w.processed[],
             "errors"      => w.errors[],
+            "cost_load"   => w.cost_load[],
             "inbox_depth" => isopen(w.inbox) ? Base.n_avail(w.inbox) : -1,
             "inbox_max"   => WORKER_CHANNEL_DEPTH
         ))
     end
 
     alive_count = count(w -> w.alive[], pool.workers)
+    
+    lane_sizes = Dict{String, Int}()
+    for p in instances(PriorityLevel)
+        lane_sizes[string(p)] = pool.waiting_list.lane_sizes[p][]
+    end
 
     return Dict{String, Any}(
         "pool_alive"        => pool.alive[],
@@ -814,9 +1557,13 @@ function get_pool_status(pool::ImmunePool)::Dict{String, Any}
         "dead_workers"      => NUM_IMMUNE_WORKERS - alive_count,
         "waiting_list_size" => pool.waiting_list.size[],
         "waiting_list_max"  => MAX_WAITING_LIST_SIZE,
+        "lane_sizes"        => lane_sizes,
         "submitted_total"   => pool.submitted[],
         "dispatched_total"  => pool.dispatched[],
         "rejected_total"    => pool.rejected[],
+        "rate_limited_total"=> pool.rate_limited[],
+        "tripwire_state"    => string(get_tripwire_state(pool.tripwire)),
+        "rejection_rate"    => get_rejection_rate(pool.tripwire),
         "workers"           => worker_statuses
     )
 end
@@ -831,16 +1578,32 @@ function get_worker_load(pool::ImmunePool)::Vector{Int}
     return [isopen(w.inbox) ? Base.n_avail(w.inbox) : -1 for w in pool.workers]
 end
 
+"""
+    get_cost_weighted_load(pool::ImmunePool) -> Vector{Int}
+
+GRUG: Return cost-weighted load of each worker.
+More meaningful than raw queue depth for load balancing decisions.
+"""
+function get_cost_weighted_load(pool::ImmunePool)::Vector{Int}
+    return [w.cost_load[] for w in pool.workers]
+end
+
 # ==============================================================================
 # EXPORTS
 # ==============================================================================
 
 export ImmunePool, ImmuneFuture, ImmuneWorkItem
 export ImmuneWorkerDiedError, ImmunePoolOverloadError, ImmunePoolDeadError, ImmuneWorkerBalancerError
+export ImmuneRateLimitExhaustedError, ImmuneTripwireTriggeredError, ImmunePriorityInversionError
 export create_immune_pool, submit_immune_work!, submit_and_wait!, kill_immune_pool!
-export restart_worker!, get_pool_status, get_worker_load
+export restart_worker!, get_pool_status, get_worker_load, get_cost_weighted_load
 export fetch_result, is_ready
 export NUM_IMMUNE_WORKERS, MAX_WAITING_LIST_SIZE, WORKER_CHANNEL_DEPTH
+export PriorityLevel, PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW, PRIORITY_JUNK
+export ScanCost, COST_CHEAP, COST_MODERATE, COST_EXPENSIVE, estimate_scan_cost
+export SourceID, SOURCE_INTERNAL, SOURCE_ANONYMOUS
+export TripwireState, TRIPWIRE_NORMAL, TRIPWIRE_ELEVATED, TRIPWIRE_HARDENED, TRIPWIRE_CRITICAL
+export TokenBucket, TripwireMonitor, ImmuneRateLimiter
 
 # ==============================================================================
 # ACADEMIC BLOCK
@@ -853,35 +1616,56 @@ export NUM_IMMUNE_WORKERS, MAX_WAITING_LIST_SIZE, WORKER_CHANNEL_DEPTH
 #    This guarantees main-path latency is unaffected by immune work, even under
 #    heavy anomaly load.
 #
-# 2. **Load Balancing via Least-Queue-Depth**: The ImmuneLoadBalancer implements
-#    a greedy bin-filling strategy: route to the worker with the fewest pending
-#    items. This minimizes worst-case queue depth under uneven load, approximating
-#    optimal Makespan scheduling for independent equal-cost tasks.
+# 2. **Load Balancing via Cost-Weighted Least-Queue-Depth**: The ImmuneLoadBalancer
+#    implements a greedy bin-filling strategy that considers both queue depth and
+#    estimated scan cost. Expensive scans (COST_EXPENSIVE) count 4x toward load
+#    compared to cheap scans. This prevents a few expensive scans from monopolizing
+#    a worker while cheap scans wait.
 #
-# 3. **Bounded Buffering**: The ImmuneWaitingList provides a bounded FIFO buffer
-#    (capacity MAX_WAITING_LIST_SIZE) between submission and dispatch. This
-#    decouples the submission rate from the processing rate and provides
-#    backpressure signaling (ImmunePoolOverloadError) when the system is saturated.
+# 3. **Priority Lanes**: The ImmuneWaitingList maintains separate FIFO queues per
+#    priority level (CRITICAL, NORMAL, LOW, JUNK). The dispatcher drains CRITICAL
+#    first, ensuring time-sensitive inputs are never starved by lower-priority work.
+#    Each lane has its own bound (MAX_WAITING_LIST_SIZE_PER_PRIORITY).
 #
-# 4. **Non-Blocking Submission**: submit_immune_work! enqueues to the WaitingList
-#    under a single lock acquisition and returns an ImmuneFuture immediately.
-#    The O(1) enqueue ensures the main path is never blocked on immune work.
+# 4. **Per-Source Rate Limiting**: Each source (identified by SourceID) has a token
+#    bucket with type-specific rate limits. This prevents a single malicious or
+#    misbehaving source from consuming the entire immune processing budget. Internal
+#    sources bypass rate limiting; anonymous sources have the strictest limits.
 #
-# 5. **Zero Silent Failures**: Every failure path either (a) throws a typed
+# 5. **Tripwire Metrics**: The TripwireMonitor tracks rejection rate in a sliding
+#    window. When rejection rate exceeds thresholds, the system transitions through
+#    ELEVATED → HARDENED → CRITICAL states. In HARDENED+ states, rate limits become
+#    much stricter, providing automatic protection against attack.
+#
+# 6. **Bounded Buffering**: The ImmuneWaitingList provides bounded FIFO buffers
+#    (capacity MAX_WAITING_LIST_SIZE_PER_PRIORITY per lane) between submission and
+#    dispatch. This decouples the submission rate from the processing rate and
+#    provides backpressure signaling (ImmunePoolOverloadError) when saturated.
+#
+# 7. **Non-Blocking Submission**: submit_immune_work! enqueues to the correct
+#    priority lane under a single lock acquisition and returns an ImmuneFuture
+#    immediately. The O(1) enqueue ensures the main path is never blocked.
+#
+# 8. **Zero Silent Failures**: Every failure path either (a) throws a typed
 #    exception to the caller, or (b) delivers a typed exception into the
 #    ImmuneFuture. There is no logging-only path for errors. Dead workers
 #    propagate ImmuneWorkerDiedError to all pending futures on their inbox.
 #
-# 6. **Future-Based Result Delivery**: Results flow through Channel{Any}(1)
+# 9. **Future-Based Result Delivery**: Results flow through Channel{Any}(1)
 #    futures, enabling both blocking (fetch_result) and polling (is_ready)
 #    consumption patterns. The single-slot channel ensures at-most-once delivery.
 #
 # Formal properties:
-#   Let W = {w₁,...,w₈}, Q_i = inbox depth of wᵢ
-#   pick_worker: argmin_{wᵢ alive} Q_i  (ties broken by round-robin)
-#   submit_immune_work!: O(1) amortized (WaitingList append + size atomic)
+#   Let W = {w₁,...w₈}, Q_i = inbox depth of wᵢ, C_i = cost_load of wᵢ
+#   pick_worker: argmin_{wᵢ alive} (Q_i * 2 + C_i/10)  (cost-weighted depth)
+#   submit_immune_work!: O(1) amortized (lane append + size atomic)
 #   dispatch latency: ≤ DISPATCHER_SLEEP_S + O(1) pick_worker time
-#   overload signal: ImmunePoolOverloadError when |WaitingList| ≥ MAX_WAITING_LIST_SIZE
+#   priority order: CRITICAL >> NORMAL >> LOW >> JUNK (strict priority drain)
+#   rate limit per source: token bucket with type-specific rate/burst
+#   tripwire thresholds: 10% → ELEVATED, 25% → HARDENED, 50% → CRITICAL
+#   hardened mode: 5x stricter rate limits across all source types
+#   overload signal: ImmunePoolOverloadError when |lane| ≥ MAX_WAITING_LIST_SIZE_PER_PRIORITY
+#   rate limit signal: ImmuneRateLimitExhaustedError when token bucket empty
 #   worker fault isolation: crash of wᵢ does not affect w_{j≠i}
 #   main-path isolation: main task never holds ImmunePool locks during submission
 # ==============================================================================

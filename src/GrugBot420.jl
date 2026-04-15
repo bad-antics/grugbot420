@@ -82,10 +82,18 @@ export add_verb!, add_relation_class!, add_synonym!
 export create_lobe!, connect_lobes!, lobe_grow!
 export create_lobe_table!
 export immune_scan!, get_immune_status, get_ledger_entries
+# GRUG: Immune thread pool exports — hardcore edition
 export create_immune_pool, submit_immune_work!, submit_and_wait!, kill_immune_pool!
-export restart_worker!, get_pool_status, get_worker_load
-export ImmuneFuture, ImmunePool
+export restart_worker!, get_pool_status, get_worker_load, get_cost_weighted_load
+export ImmuneFuture, ImmunePool, ImmuneWorkItem
 export ImmuneWorkerDiedError, ImmunePoolOverloadError, ImmunePoolDeadError, ImmuneWorkerBalancerError
+export ImmuneRateLimitExhaustedError, ImmuneTripwireTriggeredError, ImmunePriorityInversionError
 export fetch_result, is_ready
+# GRUG: Hardcore feature exports
+export PriorityLevel, PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW, PRIORITY_JUNK
+export ScanCost, COST_CHEAP, COST_MODERATE, COST_EXPENSIVE, estimate_scan_cost
+export SourceID, SOURCE_INTERNAL, SOURCE_ANONYMOUS
+export TripwireState, TRIPWIRE_NORMAL, TRIPWIRE_ELEVATED, TRIPWIRE_HARDENED, TRIPWIRE_CRITICAL
+export TokenBucket, TripwireMonitor, ImmuneRateLimiter
 
 end # module GrugBot420
